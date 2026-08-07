@@ -4,36 +4,40 @@ import de.maxhenkel.voicechat.Voicechat;
 import de.maxhenkel.voicechat.api.audiosender.AudioSender;
 import de.maxhenkel.voicechat.voice.common.MicPacket;
 import de.maxhenkel.voicechat.voice.server.Server;
+import de.maxhenkel.voicechat.voice.server.ServerVoiceEvents;
 
-import java.util.HashMap;
-import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 public class AudioSenderImpl implements AudioSender {
 
-    private static final Map<UUID, AudioSenderImpl> AUDIO_SENDERS = new HashMap<>();
+    private static final ConcurrentMap<UUID, AudioSenderImpl> AUDIO_SENDERS = new ConcurrentHashMap<>();
 
     private final UUID uuid;
-    private boolean whispering;
-    private long nextSequenceNumber;
+    private volatile boolean whispering;
+    private final AtomicLong nextSequenceNumber;
 
     public AudioSenderImpl(UUID uuid) {
         this.uuid = uuid;
+        this.nextSequenceNumber = new AtomicLong();
     }
 
     public static boolean registerAudioSender(AudioSenderImpl audioSender) {
-        if (Voicechat.SERVER.isCompatible(audioSender.uuid)) {
+        ServerVoiceEvents events = Voicechat.SERVER;
+        if (events == null || events.isCompatible(audioSender.uuid)) {
             return false;
         }
-        if (AUDIO_SENDERS.containsKey(audioSender.uuid)) {
-            return false;
-        }
-        AUDIO_SENDERS.put(audioSender.uuid, audioSender);
-        return true;
+        return AUDIO_SENDERS.putIfAbsent(audioSender.uuid, audioSender) == null;
     }
 
     public static boolean unregisterAudioSender(AudioSenderImpl audioSender) {
-        return AUDIO_SENDERS.remove(audioSender.uuid) != null;
+        return AUDIO_SENDERS.remove(audioSender.uuid, audioSender);
+    }
+
+    public static void clear() {
+        AUDIO_SENDERS.clear();
     }
 
     @Override
@@ -52,13 +56,14 @@ public class AudioSenderImpl implements AudioSender {
         if (sequenceNumber < 0L) {
             throw new IllegalArgumentException("Sequence number must be positive");
         }
-        this.nextSequenceNumber = sequenceNumber;
+        this.nextSequenceNumber.set(sequenceNumber);
         return this;
     }
 
     @Override
     public boolean canSend() {
-        return !Voicechat.SERVER.isCompatible(uuid) && AUDIO_SENDERS.get(uuid) == this;
+        ServerVoiceEvents events = Voicechat.SERVER;
+        return events != null && !events.isCompatible(uuid) && AUDIO_SENDERS.get(uuid) == this;
     }
 
     @Override
@@ -75,17 +80,18 @@ public class AudioSenderImpl implements AudioSender {
         if (data == null) {
             throw new IllegalStateException("opusEncodedData is not set");
         }
-        if (!canSend()) {
+        ServerVoiceEvents events = Voicechat.SERVER;
+        if (events == null || events.isCompatible(uuid) || AUDIO_SENDERS.get(uuid) != this) {
             return false;
         }
-        Server server = Voicechat.SERVER.getServer();
+        Server server = events.getServer();
         if (server == null) {
-            return true;
+            return false;
         }
         try {
-            MicPacket packet = new MicPacket(data, data.length > 0 && whispering, nextSequenceNumber++);
+            MicPacket packet = new MicPacket(data, data.length > 0 && whispering, nextSequenceNumber.getAndIncrement());
             if (data.length <= 0) {
-                nextSequenceNumber = 0L;
+                nextSequenceNumber.set(0L);
             }
             server.onMicPacket(uuid, packet);
         } catch (Exception e) {

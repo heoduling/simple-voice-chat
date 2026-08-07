@@ -28,8 +28,8 @@ public class Compatibility1_20_2 extends JsonMessageBaseCompatibility {
     }
 
     @Override
-    public void sendInviteMessage(Player player, Player commandSender, String groupName, String joinCommand) {
-        sendJsonMessage(player, Compatibility1_8.constructInviteMessage(commandSender, groupName, joinCommand));
+    public void sendInviteMessage(Player player, String commandSenderName, String groupName, String joinCommand) {
+        sendJsonMessage(player, Compatibility1_8.constructInviteMessage(commandSenderName, groupName, joinCommand));
     }
 
     @Override

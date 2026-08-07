@@ -2,6 +2,9 @@ package de.maxhenkel.voicechat.voice.server;
 
 import de.maxhenkel.voicechat.BuildConstants;
 import de.maxhenkel.voicechat.Voicechat;
+import de.maxhenkel.voicechat.compatibility.Compatibility;
+import de.maxhenkel.voicechat.config.ServerConfig;
+import de.maxhenkel.voicechat.config.Translations;
 import de.maxhenkel.voicechat.compatibility.PlayerHideEvent;
 import de.maxhenkel.voicechat.compatibility.PlayerShowEvent;
 import de.maxhenkel.voicechat.net.NetManager;
@@ -18,18 +21,24 @@ import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 
 import java.util.Map;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class ServerVoiceEvents implements Listener {
 
+    private static final int HOTLOAD_BATCH_SIZE = 16;
+
     private final Map<UUID, Integer> clientCompatibilities;
     private final PacketRateLimiter rateLimiter;
-    private Server server;
+    private final AtomicInteger resyncGeneration;
+    private volatile Server server;
 
     public ServerVoiceEvents() {
         clientCompatibilities = new ConcurrentHashMap<>();
         rateLimiter = new PacketRateLimiter(Voicechat.SERVER_CONFIG.tcpRateLimit.get());
+        resyncGeneration = new AtomicInteger();
     }
 
     public void init() {
@@ -80,76 +89,170 @@ public class ServerVoiceEvents implements Listener {
     }
 
     public static void sendIncompatibleMessage(Player player, int clientCompatibilityVersion) {
+        Translations translations = Voicechat.TRANSLATIONS;
+        Compatibility compatibility = Voicechat.compatibility;
+        if (translations == null || compatibility == null) {
+            return;
+        }
         if (clientCompatibilityVersion <= 6) {
             // Send a literal string, as we don't know if the translations exist on these versions
-            player.sendMessage(String.format(Voicechat.TRANSLATIONS.voicechatNotCompatibleMessage.get(), BuildConstants.MOD_COMPATIBLE_VERSION, BuildConstants.PLUGIN_NAME));
+            player.sendMessage(String.format(translations.voicechatNotCompatibleMessage.get(), BuildConstants.MOD_COMPATIBLE_VERSION, BuildConstants.PLUGIN_NAME));
         } else {
             // This translation key is only available for compatibility version 7+
-            Voicechat.compatibility.sendIncompatibleMessage(player, BuildConstants.MOD_COMPATIBLE_VERSION, BuildConstants.PLUGIN_NAME);
+            compatibility.sendIncompatibleMessage(player, BuildConstants.MOD_COMPATIBLE_VERSION, BuildConstants.PLUGIN_NAME);
         }
     }
 
     public void initializePlayerConnection(Player player) {
-        if (server == null) {
+        Server activeServer = server;
+        ServerConfig config = Voicechat.SERVER_CONFIG;
+        if (!Voicechat.ACTIVE || activeServer == null || config == null) {
             return;
         }
-        server.getPlayerStateManager().onPlayerCompatibilityCheckSucceeded(player);
-        server.getCategoryManager().onPlayerCompatibilityCheckSucceeded(player);
-        server.getGroupManager().onPlayerCompatibilityCheckSucceeded(player);
+        activeServer.getPlayerStateManager().onPlayerCompatibilityCheckSucceeded(player);
+        activeServer.getCategoryManager().onPlayerCompatibilityCheckSucceeded(player);
+        activeServer.getGroupManager().onPlayerCompatibilityCheckSucceeded(player);
 
-        Secret secret = server.generateNewSecret(player.getUniqueId());
+        Secret secret = activeServer.generateNewSecret(player.getUniqueId());
         if (secret == null) {
             Voicechat.LOGGER.warn("Player already requested secret - ignoring");
             return;
         }
-        NetManager.sendToClient(player, new SecretPacket(player, secret, server.getPort(), Voicechat.SERVER_CONFIG));
+        NetManager.sendToClient(player, new SecretPacket(player, secret, activeServer.getPort(), config));
         Voicechat.LOGGER.info("Sent secret to {}", player.getName());
+    }
+
+    public void resyncOnlinePlayers() {
+        Voicechat plugin = Voicechat.INSTANCE;
+        if (!Voicechat.ACTIVE || server == null || plugin == null || !plugin.isEnabled()) return;
+        int generation = resyncGeneration.incrementAndGet();
+        List<UUID> playerIds = Bukkit.getOnlinePlayers().stream().map(Player::getUniqueId).toList();
+        scheduleResyncBatch(playerIds, generation, 0);
+    }
+
+    private void scheduleResyncBatch(List<UUID> playerIds, int generation, int offset) {
+        if (offset >= playerIds.size() || generation != resyncGeneration.get()) return;
+        Compatibility compatibility = Voicechat.compatibility;
+        if (!Voicechat.ACTIVE || compatibility == null) return;
+        compatibility.runTaskLater(() -> {
+            Voicechat plugin = Voicechat.INSTANCE;
+            if (!Voicechat.ACTIVE || generation != resyncGeneration.get() || server == null
+                    || plugin == null || !plugin.isEnabled() || Voicechat.compatibility != compatibility) return;
+            int end = Math.min(offset + HOTLOAD_BATCH_SIZE, playerIds.size());
+            for (int index = offset; index < end; index++) {
+                Player player = Bukkit.getPlayer(playerIds.get(index));
+                if (player == null) continue;
+                compatibility.runForPlayer(player, () -> resyncPlayer(player, generation));
+            }
+            scheduleResyncBatch(playerIds, generation, end);
+        }, 1L);
+    }
+
+    private void resyncPlayer(Player player, int generation) {
+        Server activeServer = server;
+        NetManager activeNetManager = Voicechat.netManager;
+        Voicechat plugin = Voicechat.INSTANCE;
+        ServerConfig config = Voicechat.SERVER_CONFIG;
+        if (!Voicechat.ACTIVE || generation != resyncGeneration.get() || activeServer == null
+                || activeNetManager == null || config == null || !player.isOnline()
+                || plugin == null || !plugin.isEnabled()) return;
+        ServerPlayerManager.refreshPlayer(player);
+        activeNetManager.synchronizePlayer(player);
+        Secret secret = activeServer.generateHotloadSecret(player.getUniqueId());
+        if (secret != null) {
+            // Do not assume that an existing player has the mod. Only a real
+            // UDP connection earns a compatibility entry and full state sync.
+            NetManager.sendToClientUnchecked(player, new SecretPacket(player, secret, activeServer.getPort(), config));
+        }
+    }
+
+    /**
+     * The normal login path has already sent its initial state. A player who
+     * was online during PlugMan load reaches this point after proving that it
+     * can authenticate to the UDP server.
+     */
+    public void onHotloadConnectionValidated(Player player) {
+        Server activeServer = server;
+        if (!Voicechat.ACTIVE || activeServer == null || !player.isOnline()) {
+            return;
+        }
+        if (clientCompatibilities.putIfAbsent(player.getUniqueId(), Voicechat.COMPATIBILITY_VERSION) != null) {
+            return;
+        }
+        activeServer.getPlayerStateManager().onPlayerCompatibilityCheckSucceeded(player);
+        activeServer.getCategoryManager().onPlayerCompatibilityCheckSucceeded(player);
+        activeServer.getGroupManager().onPlayerCompatibilityCheckSucceeded(player);
     }
 
     @EventHandler
     public void onPlayerJoin(PlayerJoinEvent event) {
-        server.getPlayerStateManager().onPlayerJoin(event);
+        Server activeServer = server;
+        ServerConfig config = Voicechat.SERVER_CONFIG;
+        if (!Voicechat.ACTIVE || activeServer == null || config == null) return;
+        Player player = event.getPlayer();
+        activeServer.getPlayerStateManager().onPlayerJoin(event);
 
-        if (!Voicechat.SERVER_CONFIG.forceVoiceChat.get()) {
+        // The client sends RequestSecretPacket while it is processing the join
+        // packet. PlayerJoinEvent can run after that request, so register the
+        // channels and send a bounded retry from the same player-owned context.
+        NetManager activeNetManager = Voicechat.netManager;
+        Compatibility compatibility = Voicechat.compatibility;
+        if (activeNetManager != null && compatibility != null) {
+            ServerPlayerManager.refreshPlayer(player);
+            activeNetManager.synchronizePlayer(player);
+            clientCompatibilities.remove(player.getUniqueId());
+            Secret secret = activeServer.generateHotloadSecret(player.getUniqueId());
+            NetManager.sendToClientUnchecked(player, new SecretPacket(player, secret, activeServer.getPort(), config));
+        }
+
+        if (!config.forceVoiceChat.get()) {
             return;
         }
-        Player player = event.getPlayer();
 
-        Voicechat.compatibility.runTaskLater(() -> {
-            if (!player.isOnline()) {
-                return;
-            }
-            if (!isCompatible(player)) {
-                player.kickPlayer(String.format(
-                        Voicechat.TRANSLATIONS.forceVoicechatKickMessage.get(),
-                        BuildConstants.PLUGIN_NAME,
-                        Voicechat.INSTANCE.getDescription().getVersion()
-                ));
-            }
-        }, Voicechat.SERVER_CONFIG.loginTimeout.get() / 50L);
+        Translations translations = Voicechat.TRANSLATIONS;
+        if (compatibility == null || translations == null) return;
+        compatibility.runTaskLater(() -> {
+            if (!Voicechat.ACTIVE || Voicechat.compatibility != compatibility) return;
+            compatibility.runForPlayer(player, () -> {
+                Voicechat plugin = Voicechat.INSTANCE;
+                if (!Voicechat.ACTIVE || !player.isOnline() || plugin == null || !plugin.isEnabled()) return;
+                if (!isCompatible(player)) {
+                    player.kickPlayer(String.format(
+                            translations.forceVoicechatKickMessage.get(),
+                            BuildConstants.PLUGIN_NAME,
+                            plugin.getDescription().getVersion()
+                    ));
+                }
+            });
+        }, config.loginTimeout.get() / 50L);
     }
 
     @EventHandler
     public void onPlayerQuit(PlayerQuitEvent event) {
-        server.getPlayerStateManager().onPlayerQuit(event);
-        server.getGroupManager().onPlayerQuit(event);
-
         clientCompatibilities.remove(event.getPlayer().getUniqueId());
         rateLimiter.onPlayerLoggedOut(event.getPlayer());
-        if (server == null) {
+        Server activeServer = server;
+        if (activeServer == null) {
             return;
         }
 
-        server.disconnectClient(event.getPlayer().getUniqueId());
+        activeServer.getPlayerStateManager().onPlayerQuit(event);
+        activeServer.getGroupManager().onPlayerQuit(event);
+
+        activeServer.disconnectClient(event.getPlayer().getUniqueId());
         Voicechat.LOGGER.info("Disconnecting client {}", event.getPlayer().getName());
     }
 
     public void onPlayerHide(PlayerHideEvent event) {
-        server.getPlayerStateManager().onPlayerHide(event);
+        Server activeServer = server;
+        if (activeServer == null) return;
+        activeServer.getPlayerStateManager().onPlayerHide(event);
     }
 
     public void onPlayerShow(PlayerShowEvent event) {
-        server.getPlayerStateManager().onPlayerShow(event);
+        Server activeServer = server;
+        if (activeServer == null) return;
+        activeServer.getPlayerStateManager().onPlayerShow(event);
     }
 
     public PacketRateLimiter getRateLimiter() {
@@ -158,5 +261,19 @@ public class ServerVoiceEvents implements Listener {
 
     public Server getServer() {
         return server;
+    }
+
+    public void shutdown() {
+        resyncGeneration.incrementAndGet();
+        Server activeServer = server;
+        server = null;
+        try {
+            if (activeServer != null) {
+                activeServer.close();
+            }
+        } finally {
+            clientCompatibilities.clear();
+            rateLimiter.clear();
+        }
     }
 }

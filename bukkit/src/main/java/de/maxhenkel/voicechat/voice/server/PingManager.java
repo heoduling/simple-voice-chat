@@ -12,20 +12,23 @@ import java.util.stream.Collectors;
 public class PingManager {
 
     private final Map<UUID, Ping> listeners;
+    private final Map<UUID, UUID> pingByPlayer;
     private final Server server;
 
     public PingManager(Server server) {
         this.server = server;
         listeners = new ConcurrentHashMap<>();
+        pingByPlayer = new ConcurrentHashMap<>();
     }
 
     public void onPongPacket(PingPacket packet) {
-        Voicechat.LOGGER.info("Received pong {}", packet.getId());
+        Voicechat.LOGGER.debug("Received pong {}", packet.getId());
         Ping ping = listeners.remove(packet.getId());
         if (ping == null) {
             return;
         }
-        ping.listener.onPong(ping.attempt, System.currentTimeMillis() - packet.getTimestamp());
+        pingByPlayer.remove(ping.connection.getPlayerUUID(), ping.id);
+        ping.listener.onPong(ping.getAttempt(), System.currentTimeMillis() - packet.getTimestamp());
     }
 
     public void checkTimeouts() {
@@ -35,16 +38,28 @@ public class PingManager {
         List<Map.Entry<UUID, Ping>> timedOut = listeners.entrySet().stream().filter(uuidPingEntry -> uuidPingEntry.getValue().isTimedOut()).collect(Collectors.toList());
         for (Map.Entry<UUID, Ping> pingEntry : timedOut) {
             Ping ping = pingEntry.getValue();
-            if (ping.attempt >= ping.maxAttempts) {
-                listeners.remove(pingEntry.getKey());
-                ping.listener.onTimeout(ping.attempt);
+            if (listeners.get(pingEntry.getKey()) != ping) {
+                continue;
+            }
+            if (!ping.id.equals(pingByPlayer.get(ping.connection.getPlayerUUID()))) {
+                listeners.remove(pingEntry.getKey(), ping);
+                continue;
+            }
+            int attempt = ping.getAttempt();
+            if (attempt >= ping.maxAttempts) {
+                listeners.remove(pingEntry.getKey(), ping);
+                pingByPlayer.remove(ping.connection.getPlayerUUID(), ping.id);
+                ping.listener.onTimeout(attempt);
             } else {
-                ping.listener.onFailedAttempt(ping.attempt);
+                ping.listener.onFailedAttempt(attempt);
                 try {
-                    ping.send();
+                    ping.sendNext();
                 } catch (Exception e) {
-                    ping.listener.onTimeout(ping.attempt);
-                    Voicechat.LOGGER.warn("Failed to send ping {} after attempt {}", ping.id, ping.attempt);
+                    listeners.remove(ping.id, ping);
+                    pingByPlayer.remove(ping.connection.getPlayerUUID(), ping.id);
+                    int failedAttempt = ping.getAttempt();
+                    ping.listener.onTimeout(failedAttempt);
+                    Voicechat.LOGGER.warn("Failed to send ping {} after attempt {}", ping.id, failedAttempt);
                 }
             }
         }
@@ -52,8 +67,31 @@ public class PingManager {
 
     public void sendPing(ClientConnection connection, long timeout, int attempts, PingListener listener) throws Exception {
         Ping ping = new Ping(connection, listener, timeout, attempts);
-        listeners.put(ping.id, ping);
-        ping.send();
+        PingPacket packet = ping.prepareNextPacket();
+        synchronized (this) {
+            UUID oldPingId = pingByPlayer.put(connection.getPlayerUUID(), ping.id);
+            if (oldPingId != null) {
+                listeners.remove(oldPingId);
+            }
+            listeners.put(ping.id, ping);
+        }
+        try {
+            server.sendPacketRaw(packet, connection);
+            Voicechat.LOGGER.debug("Sent ping {} attempt {}", ping.id, ping.getAttempt());
+        } catch (Exception e) {
+            listeners.remove(ping.id, ping);
+            pingByPlayer.remove(connection.getPlayerUUID(), ping.id);
+            throw e;
+        }
+    }
+
+    /**
+     * Drops callbacks that belong to the stopped voice server. Keeping them
+     * after a PlugMan unload would retain plugin classes and connections.
+     */
+    public void clear() {
+        listeners.clear();
+        pingByPlayer.clear();
     }
 
     private class Ping {
@@ -74,15 +112,24 @@ public class PingManager {
             this.attempt = 0;
         }
 
-        public boolean isTimedOut() {
+        public synchronized boolean isTimedOut() {
             return (System.currentTimeMillis() - timestamp) >= timeout;
         }
 
-        public void send() throws Exception {
+        public synchronized int getAttempt() {
+            return attempt;
+        }
+
+        public synchronized PingPacket prepareNextPacket() {
             timestamp = System.currentTimeMillis();
             attempt++;
-            server.sendPacketRaw(new PingPacket(id, timestamp), connection);
-            Voicechat.LOGGER.info("Sent ping {} attempt {}", id, attempt);
+            return new PingPacket(id, timestamp);
+        }
+
+        public void sendNext() throws Exception {
+            PingPacket packet = prepareNextPacket();
+            server.sendPacketRaw(packet, connection);
+            Voicechat.LOGGER.debug("Sent ping {} attempt {}", id, getAttempt());
         }
     }
 

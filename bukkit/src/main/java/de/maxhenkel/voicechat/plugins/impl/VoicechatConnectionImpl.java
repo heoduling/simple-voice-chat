@@ -4,12 +4,16 @@ import de.maxhenkel.voicechat.Voicechat;
 import de.maxhenkel.voicechat.api.Group;
 import de.maxhenkel.voicechat.api.ServerPlayer;
 import de.maxhenkel.voicechat.api.VoicechatConnection;
+import de.maxhenkel.voicechat.compatibility.Compatibility;
 import de.maxhenkel.voicechat.voice.common.PlayerState;
 import de.maxhenkel.voicechat.voice.server.PlayerStateManager;
 import de.maxhenkel.voicechat.voice.server.Server;
+import de.maxhenkel.voicechat.voice.server.ServerPlayerManager;
+import de.maxhenkel.voicechat.voice.server.ServerVoiceEvents;
 import org.bukkit.entity.Player;
 
 import javax.annotation.Nullable;
+import java.util.UUID;
 
 public class VoicechatConnectionImpl implements VoicechatConnection {
 
@@ -26,12 +30,24 @@ public class VoicechatConnectionImpl implements VoicechatConnection {
         this.group = GroupImpl.create(state);
     }
 
+    public VoicechatConnectionImpl(ServerPlayerManager.PlayerSnapshot player, PlayerState state) {
+        this.serverPlayer = player.getRealPlayer();
+        this.player = player;
+        this.state = state;
+        this.group = GroupImpl.create(state);
+    }
+
+    public UUID getPlayerUuid() {
+        return player.getUuid();
+    }
+
     @Nullable
     public static VoicechatConnectionImpl fromPlayer(@Nullable Player player) {
         if (player == null) {
             return null;
         }
-        Server server = Voicechat.SERVER.getServer();
+        ServerVoiceEvents events = Voicechat.SERVER;
+        Server server = events == null ? null : events.getServer();
         if (server == null) {
             return null;
         }
@@ -55,8 +71,15 @@ public class VoicechatConnectionImpl implements VoicechatConnection {
 
     @Override
     public void setGroup(@Nullable Group group) {
-        Server server = Voicechat.SERVER.getServer();
-        if (server == null) {
+        Compatibility compatibility = Voicechat.compatibility;
+        if (!Voicechat.ACTIVE || compatibility == null) return;
+        compatibility.runForPlayer(serverPlayer, () -> setGroupOnPlayerThread(group));
+    }
+
+    private void setGroupOnPlayerThread(@Nullable Group group) {
+        ServerVoiceEvents events = Voicechat.SERVER;
+        Server server = events == null ? null : events.getServer();
+        if (server == null || !serverPlayer.isOnline()) {
             return;
         }
         if (group == null) {
@@ -68,7 +91,7 @@ public class VoicechatConnectionImpl implements VoicechatConnection {
             de.maxhenkel.voicechat.voice.server.Group actualGroup = server.getGroupManager().getGroup(g.getGroup().getId());
             if (actualGroup == null) {
                 server.getGroupManager().addGroup(g.getGroup(), serverPlayer);
-                actualGroup = g.getGroup();
+                return;
             }
             server.getGroupManager().joinGroup(actualGroup, serverPlayer, g.getGroup().getPassword());
         }
@@ -84,7 +107,8 @@ public class VoicechatConnectionImpl implements VoicechatConnection {
         if (isInstalled()) {
             return;
         }
-        Server server = Voicechat.SERVER.getServer();
+        ServerVoiceEvents events = Voicechat.SERVER;
+        Server server = events == null ? null : events.getServer();
         if (server == null) {
             return;
         }
@@ -110,7 +134,8 @@ public class VoicechatConnectionImpl implements VoicechatConnection {
         if (isInstalled()) {
             return;
         }
-        Server server = Voicechat.SERVER.getServer();
+        ServerVoiceEvents events = Voicechat.SERVER;
+        Server server = events == null ? null : events.getServer();
         if (server == null) {
             return;
         }
@@ -128,7 +153,8 @@ public class VoicechatConnectionImpl implements VoicechatConnection {
 
     @Override
     public boolean isInstalled() {
-        return Voicechat.SERVER.isCompatible(serverPlayer);
+        ServerVoiceEvents events = Voicechat.SERVER;
+        return events != null && events.isCompatible(getPlayerUuid());
     }
 
     @Override

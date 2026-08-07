@@ -12,6 +12,7 @@ import de.maxhenkel.voicechat.api.opus.OpusEncoder;
 import de.maxhenkel.voicechat.api.packets.EntitySoundPacket;
 import de.maxhenkel.voicechat.api.packets.LocationalSoundPacket;
 import de.maxhenkel.voicechat.api.packets.StaticSoundPacket;
+import de.maxhenkel.voicechat.config.ServerConfig;
 import de.maxhenkel.voicechat.plugins.PluginManager;
 import de.maxhenkel.voicechat.plugins.impl.audiochannel.*;
 import de.maxhenkel.voicechat.plugins.impl.audiolistener.PlayerAudioListenerImpl;
@@ -24,9 +25,9 @@ import de.maxhenkel.voicechat.voice.common.PlayerState;
 import de.maxhenkel.voicechat.voice.common.SoundPacket;
 import de.maxhenkel.voicechat.voice.server.ClientConnection;
 import de.maxhenkel.voicechat.voice.server.Server;
+import de.maxhenkel.voicechat.voice.server.ServerVoiceEvents;
 import de.maxhenkel.voicechat.voice.server.ServerPlayerManager;
 import org.bukkit.Bukkit;
-import org.bukkit.World;
 
 import javax.annotation.Nullable;
 import java.util.Collection;
@@ -46,6 +47,12 @@ public class VoicechatServerApiImpl extends VoicechatApiImpl implements Voicecha
 
     public static VoicechatServerApiImpl instance() {
         return INSTANCE;
+    }
+
+    @Nullable
+    private static Server getActiveServer() {
+        ServerVoiceEvents events = Voicechat.SERVER;
+        return events == null ? null : events.getServer();
     }
 
 
@@ -73,7 +80,7 @@ public class VoicechatServerApiImpl extends VoicechatApiImpl implements Voicecha
     @Nullable
     @Override
     public EntityAudioChannel createEntityAudioChannel(UUID channelId, Entity entity) {
-        Server server = Voicechat.SERVER.getServer();
+        Server server = getActiveServer();
         if (server == null) {
             return null;
         }
@@ -83,9 +90,12 @@ public class VoicechatServerApiImpl extends VoicechatApiImpl implements Voicecha
     @Nullable
     @Override
     public LocationalAudioChannel createLocationalAudioChannel(UUID channelId, ServerLevel level, Position initialPosition) {
-        Server server = Voicechat.SERVER.getServer();
+        Server server = getActiveServer();
         if (server == null) {
             return null;
+        }
+        if (!(level instanceof ServerLevelImpl)) {
+            throw new IllegalArgumentException("level is not an instance of ServerLevelImpl");
         }
         if (initialPosition instanceof PositionImpl) {
             return new LocationalAudioChannelImpl(channelId, server, level, (PositionImpl) initialPosition);
@@ -97,7 +107,7 @@ public class VoicechatServerApiImpl extends VoicechatApiImpl implements Voicecha
     @Nullable
     @Override
     public StaticAudioChannel createStaticAudioChannel(UUID channelId, ServerLevel level, VoicechatConnection connection) {
-        Server server = Voicechat.SERVER.getServer();
+        Server server = getActiveServer();
         if (server == null) {
             return null;
         }
@@ -109,7 +119,7 @@ public class VoicechatServerApiImpl extends VoicechatApiImpl implements Voicecha
     @Nullable
     @Override
     public StaticAudioChannel createStaticAudioChannel(UUID channelId) {
-        Server server = Voicechat.SERVER.getServer();
+        Server server = getActiveServer();
         if (server == null) {
             return null;
         }
@@ -154,7 +164,8 @@ public class VoicechatServerApiImpl extends VoicechatApiImpl implements Voicecha
 
     @Override
     public boolean registerAudioListener(AudioListener listener) {
-        return PluginManager.instance().registerAudioListener(listener);
+        PluginManager manager = PluginManager.getIfInitialized();
+        return getActiveServer() != null && manager != null && manager.registerAudioListener(listener);
     }
 
     @Override
@@ -164,37 +175,43 @@ public class VoicechatServerApiImpl extends VoicechatApiImpl implements Voicecha
 
     @Override
     public boolean unregisterAudioListener(UUID listenerId) {
-        return PluginManager.instance().unregisterAudioListener(listenerId);
+        PluginManager manager = PluginManager.getIfInitialized();
+        return manager != null && manager.unregisterAudioListener(listenerId);
     }
 
     public static void sendPacket(VoicechatConnection receiver, SoundPacket<?> soundPacket) {
-        if (!(receiver.getPlayer() instanceof ServerPlayerImpl)) {
-            throw new IllegalArgumentException("ServerPlayer is not an instance of ServerPlayerImpl");
+        if (!(receiver instanceof VoicechatConnectionImpl)) {
+            throw new IllegalArgumentException("VoicechatConnection is not an instance of VoicechatConnectionImpl");
         }
-        sendPacket(((ServerPlayerImpl) receiver.getPlayer()).getRealServerPlayer(), soundPacket);
+        Server server = getActiveServer();
+        if (server == null) return;
+        ServerPlayerManager.PlayerSnapshot snapshot = ServerPlayerManager.getSnapshot(
+                ((VoicechatConnectionImpl) receiver).getPlayerUuid());
+        if (snapshot != null) server.sendPluginSoundPacket(snapshot, soundPacket);
     }
 
     public static void sendPacket(org.bukkit.entity.Player receiver, SoundPacket<?> soundPacket) {
-        Server server = Voicechat.SERVER.getServer();
+        Server server = getActiveServer();
         if (server == null) {
             return;
         }
-        PlayerState state = server.getPlayerStateManager().getState(receiver.getUniqueId());
-        if (state == null) {
-            return;
-        }
-        @Nullable ClientConnection c = server.getConnections().get(receiver.getUniqueId());
-        server.sendSoundPacket(null, null, receiver, state, c, soundPacket, SoundPacketEvent.SOURCE_PLUGIN);
+        ServerPlayerManager.PlayerSnapshot snapshot = ServerPlayerManager.getSnapshot(receiver.getUniqueId());
+        if (snapshot != null) server.sendPluginSoundPacket(snapshot, soundPacket);
     }
 
     @Nullable
     @Override
     public VoicechatConnection getConnectionOf(UUID playerUuid) {
-        org.bukkit.entity.Player player = Bukkit.getPlayer(playerUuid);
-        if (player == null) {
+        Server server = getActiveServer();
+        if (server == null) {
             return null;
         }
-        return VoicechatConnectionImpl.fromPlayer(player);
+        ServerPlayerManager.PlayerSnapshot snapshot = ServerPlayerManager.getSnapshot(playerUuid);
+        if (snapshot == null) {
+            return null;
+        }
+        PlayerState state = server.getPlayerStateManager().getState(playerUuid);
+        return state == null ? null : new VoicechatConnectionImpl(snapshot, state);
     }
 
     @Override
@@ -214,7 +231,7 @@ public class VoicechatServerApiImpl extends VoicechatApiImpl implements Voicecha
 
     @Override
     public boolean removeGroup(UUID groupId) {
-        Server server = Voicechat.SERVER.getServer();
+        Server server = getActiveServer();
         if (server == null) {
             return false;
         }
@@ -224,16 +241,17 @@ public class VoicechatServerApiImpl extends VoicechatApiImpl implements Voicecha
     @Nullable
     @Override
     public Group getGroup(UUID groupId) {
-        Server server = Voicechat.SERVER.getServer();
+        Server server = getActiveServer();
         if (server == null) {
             return null;
         }
-        return new GroupImpl(server.getGroupManager().getGroup(groupId));
+        de.maxhenkel.voicechat.voice.server.Group group = server.getGroupManager().getGroup(groupId);
+        return group == null ? null : new GroupImpl(group);
     }
 
     @Override
     public Collection<Group> getGroups() {
-        Server server = Voicechat.SERVER.getServer();
+        Server server = getActiveServer();
         if (server == null) {
             return Collections.emptyList();
         }
@@ -249,7 +267,11 @@ public class VoicechatServerApiImpl extends VoicechatApiImpl implements Voicecha
     @Override
     public Collection<ServerPlayer> getPlayersInRange(ServerLevel level, Position pos, double range, @Nullable Predicate<ServerPlayer> filter) {
         if (pos instanceof PositionImpl) {
-            return ServerPlayerManager.getPlayersInRange((World) level.getServerLevel(), ((PositionImpl) pos).getPosition(), range, filter == null ? null : player -> filter.test(new ServerPlayerImpl(player))).stream().map(ServerPlayerImpl::new).collect(Collectors.toList());
+            if (!(level instanceof ServerLevelImpl)) {
+                throw new IllegalArgumentException("level is not an instance of ServerLevelImpl");
+            }
+            return ServerPlayerManager.getSnapshotsInRange(((ServerLevelImpl) level).getWorldId(), pos, range, filter)
+                    .stream().map(player -> (ServerPlayer) player).collect(Collectors.toList());
         } else {
             throw new IllegalArgumentException("Position is not an instance of PositionImpl");
         }
@@ -257,7 +279,11 @@ public class VoicechatServerApiImpl extends VoicechatApiImpl implements Voicecha
 
     @Override
     public double getBroadcastRange() {
-        return Math.max(Voicechat.SERVER_CONFIG.voiceChatDistance.get(), Voicechat.SERVER_CONFIG.broadcastRange.get());
+        ServerConfig config = Voicechat.SERVER_CONFIG;
+        if (config == null) {
+            return 0D;
+        }
+        return Math.max(config.voiceChatDistance.get(), config.broadcastRange.get());
     }
 
     @Override
@@ -265,7 +291,7 @@ public class VoicechatServerApiImpl extends VoicechatApiImpl implements Voicecha
         if (!(category instanceof VolumeCategoryImpl)) {
             throw new IllegalArgumentException("VolumeCategory is not an instance of VolumeCategoryImpl");
         }
-        Server server = Voicechat.SERVER.getServer();
+        Server server = getActiveServer();
         if (server == null) {
             return;
         }
@@ -275,7 +301,7 @@ public class VoicechatServerApiImpl extends VoicechatApiImpl implements Voicecha
 
     @Override
     public void unregisterVolumeCategory(String categoryId) {
-        Server server = Voicechat.SERVER.getServer();
+        Server server = getActiveServer();
         if (server == null) {
             return;
         }
@@ -287,7 +313,7 @@ public class VoicechatServerApiImpl extends VoicechatApiImpl implements Voicecha
 
     @Override
     public Collection<VolumeCategory> getVolumeCategories() {
-        Server server = Voicechat.SERVER.getServer();
+        Server server = getActiveServer();
         if (server == null) {
             return Collections.emptyList();
         }
@@ -296,7 +322,11 @@ public class VoicechatServerApiImpl extends VoicechatApiImpl implements Voicecha
 
     @Override
     public ConfigAccessor getServerConfig() {
-        return new ConfigAccessorImpl(Voicechat.SERVER_CONFIG.voiceChatDistance.getConfig());
+        ServerConfig config = Voicechat.SERVER_CONFIG;
+        if (config == null) {
+            throw new IllegalStateException("Voice chat server is not running");
+        }
+        return new ConfigAccessorImpl(config.voiceChatDistance.getConfig());
     }
 
 }

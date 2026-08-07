@@ -1,11 +1,9 @@
 package de.maxhenkel.voicechat.plugins.impl.events;
 
-import de.maxhenkel.voicechat.Voicechat;
 import de.maxhenkel.voicechat.api.VoicechatConnection;
 import de.maxhenkel.voicechat.api.events.PlayerStateChangedEvent;
-import de.maxhenkel.voicechat.plugins.impl.VoicechatConnectionImpl;
+import de.maxhenkel.voicechat.plugins.impl.VoicechatServerApiImpl;
 import de.maxhenkel.voicechat.voice.common.PlayerState;
-import org.bukkit.entity.Player;
 
 import javax.annotation.Nullable;
 import java.util.UUID;
@@ -14,7 +12,7 @@ public class PlayerStateChangedEventImpl extends ServerEventImpl implements Play
 
     protected final PlayerState state;
     @Nullable
-    protected VoicechatConnectionImpl connection;
+    protected volatile VoicechatConnection connection;
 
     public PlayerStateChangedEventImpl(PlayerState state) {
         this.state = state;
@@ -39,11 +37,7 @@ public class PlayerStateChangedEventImpl extends ServerEventImpl implements Play
     @Nullable
     public VoicechatConnection getConnection() {
         if (connection == null) {
-            Player player = Voicechat.INSTANCE.getServer().getPlayer(state.getUuid());
-            if (player == null) {
-                return null;
-            }
-            connection = VoicechatConnectionImpl.fromPlayer(player);
+            connection = VoicechatServerApiImpl.instance().getConnectionOf(state.getUuid());
         }
         return connection;
     }

@@ -3,19 +3,25 @@ package de.maxhenkel.voicechat.plugins.impl;
 import de.maxhenkel.voicechat.api.ServerLevel;
 import org.bukkit.World;
 
-import java.util.Objects;
+import java.util.UUID;
 
 public class ServerLevelImpl implements ServerLevel {
 
     private final World serverLevel;
+    private final UUID worldId;
 
     public ServerLevelImpl(World serverLevel) {
         this.serverLevel = serverLevel;
+        this.worldId = serverLevel.getUID();
     }
 
     @Override
     public Object getServerLevel() {
         return serverLevel;
+    }
+
+    public UUID getWorldId() {
+        return worldId;
     }
 
     @Override
@@ -27,11 +33,11 @@ public class ServerLevelImpl implements ServerLevel {
             return false;
         }
         ServerLevelImpl that = (ServerLevelImpl) object;
-        return Objects.equals(serverLevel, that.serverLevel);
+        return worldId.equals(that.worldId);
     }
 
     @Override
     public int hashCode() {
-        return serverLevel != null ? serverLevel.hashCode() : 0;
+        return worldId.hashCode();
     }
 }

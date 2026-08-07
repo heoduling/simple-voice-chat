@@ -7,6 +7,7 @@ import com.mojang.brigadier.suggestion.SuggestionsBuilder;
 import de.maxhenkel.voicechat.Voicechat;
 import de.maxhenkel.voicechat.voice.server.Group;
 import de.maxhenkel.voicechat.voice.server.Server;
+import de.maxhenkel.voicechat.voice.server.ServerVoiceEvents;
 
 import java.util.concurrent.CompletableFuture;
 
@@ -16,7 +17,8 @@ public class GroupNameSuggestionProvider implements SuggestionProvider<Object> {
 
     @Override
     public CompletableFuture<Suggestions> getSuggestions(CommandContext<Object> context, SuggestionsBuilder builder) {
-        Server server = Voicechat.SERVER.getServer();
+        ServerVoiceEvents events = Voicechat.SERVER;
+        Server server = events == null ? null : events.getServer();
         if (server == null) {
             return builder.buildFuture();
         }

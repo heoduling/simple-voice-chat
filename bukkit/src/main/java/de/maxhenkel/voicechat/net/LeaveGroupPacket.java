@@ -3,6 +3,8 @@ package de.maxhenkel.voicechat.net;
 import de.maxhenkel.voicechat.Voicechat;
 import de.maxhenkel.voicechat.util.FriendlyByteBuf;
 import de.maxhenkel.voicechat.util.Key;
+import de.maxhenkel.voicechat.voice.server.Server;
+import de.maxhenkel.voicechat.voice.server.ServerVoiceEvents;
 import org.bukkit.entity.Player;
 
 public class LeaveGroupPacket implements Packet<LeaveGroupPacket> {
@@ -20,7 +22,11 @@ public class LeaveGroupPacket implements Packet<LeaveGroupPacket> {
 
     @Override
     public void onPacket(Player player) {
-        Voicechat.SERVER.getServer().getGroupManager().onLeaveGroupPacket(player, this);
+        ServerVoiceEvents events = Voicechat.SERVER;
+        Server server = events == null ? null : events.getServer();
+        if (server != null) {
+            server.getGroupManager().onLeaveGroupPacket(player, this);
+        }
     }
 
     @Override

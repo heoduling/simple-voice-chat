@@ -11,6 +11,9 @@ import java.util.UUID;
 public class PingHandler {
 
     public static final UUID PING_V1 = UUID.fromString("58bc9ae9-c7a8-45e4-a11c-efbb67199425");
+    private static final int MAX_PING_RESPONSES_PER_SECOND = 100;
+    private static long pingWindowSecond = Long.MIN_VALUE;
+    private static int pingResponses;
 
     public static boolean onPacket(Server server, SocketAddress socketAddress, UUID playerID, FriendlyByteBuf buf) {
         if (!Voicechat.SERVER_CONFIG.allowPings.get()) {
@@ -18,6 +21,11 @@ public class PingHandler {
         }
         if (!PING_V1.equals(playerID)) {
             return false;
+        }
+        if (!acquirePingResponse(System.currentTimeMillis())) {
+            CooldownTimer.run("ping-rate-limit", () ->
+                    Voicechat.LOGGER.warn("Dropping excessive unauthenticated voice chat pings"));
+            return true;
         }
         try {
             byte[] payload = buf.readByteArray();
@@ -39,5 +47,14 @@ public class PingHandler {
             Voicechat.LOGGER.debug("Failed to send ping to {}: {}", socketAddress, e.getMessage());
         }
         return true;
+    }
+
+    static synchronized boolean acquirePingResponse(long nowMillis) {
+        long currentSecond = nowMillis / 1_000L;
+        if (pingWindowSecond != currentSecond) {
+            pingWindowSecond = currentSecond;
+            pingResponses = 0;
+        }
+        return ++pingResponses <= MAX_PING_RESPONSES_PER_SECOND;
     }
 }

@@ -3,6 +3,7 @@ package de.maxhenkel.voicechat.net;
 import de.maxhenkel.voicechat.Voicechat;
 import de.maxhenkel.voicechat.util.FriendlyByteBuf;
 import de.maxhenkel.voicechat.util.Key;
+import de.maxhenkel.voicechat.voice.server.ServerVoiceEvents;
 import org.bukkit.entity.Player;
 
 public class RequestSecretPacket implements Packet<RequestSecretPacket> {
@@ -30,7 +31,10 @@ public class RequestSecretPacket implements Packet<RequestSecretPacket> {
 
     @Override
     public void onPacket(Player player) {
-        Voicechat.SERVER.onRequestSecretPacket(player, this);
+        ServerVoiceEvents events = Voicechat.SERVER;
+        if (events != null) {
+            events.onRequestSecretPacket(player, this);
+        }
     }
 
     @Override

@@ -1,6 +1,7 @@
 package de.maxhenkel.voicechat.voice.server;
 
 import de.maxhenkel.voicechat.Voicechat;
+import de.maxhenkel.voicechat.compatibility.Compatibility;
 import de.maxhenkel.voicechat.net.AddCategoryPacket;
 import de.maxhenkel.voicechat.net.NetManager;
 import de.maxhenkel.voicechat.net.RemoveCategoryPacket;
@@ -15,7 +16,7 @@ public class ServerCategoryManager extends CategoryManager {
     public void onPlayerCompatibilityCheckSucceeded(Player player) {
         Voicechat.LOGGER.debug("Synchronizing {} volume categories with {}", categories.size(), player.getName());
         for (VolumeCategoryImpl category : getCategories()) {
-            broadcastAddCategory(category);
+            NetManager.sendToClient(player, new AddCategoryPacket(category));
         }
     }
 
@@ -37,12 +38,28 @@ public class ServerCategoryManager extends CategoryManager {
 
     private void broadcastAddCategory(VolumeCategoryImpl category) {
         AddCategoryPacket packet = new AddCategoryPacket(category);
-        Voicechat.INSTANCE.getServer().getOnlinePlayers().forEach(p -> NetManager.sendToClient(p, packet));
+        Compatibility compatibility = Voicechat.compatibility;
+        if (!Voicechat.ACTIVE || compatibility == null) return;
+        compatibility.runTask(() -> {
+            Voicechat plugin = Voicechat.INSTANCE;
+            if (!Voicechat.ACTIVE || plugin == null || !plugin.isEnabled()) return;
+            plugin.getServer().getOnlinePlayers().forEach(p -> NetManager.sendToClient(p, packet));
+        });
     }
 
     private void broadcastRemoveCategory(String categoryId) {
         RemoveCategoryPacket packet = new RemoveCategoryPacket(categoryId);
-        Voicechat.INSTANCE.getServer().getOnlinePlayers().forEach(p -> NetManager.sendToClient(p, packet));
+        Compatibility compatibility = Voicechat.compatibility;
+        if (!Voicechat.ACTIVE || compatibility == null) return;
+        compatibility.runTask(() -> {
+            Voicechat plugin = Voicechat.INSTANCE;
+            if (!Voicechat.ACTIVE || plugin == null || !plugin.isEnabled()) return;
+            plugin.getServer().getOnlinePlayers().forEach(p -> NetManager.sendToClient(p, packet));
+        });
+    }
+
+    public void clear() {
+        categories.clear();
     }
 
 }

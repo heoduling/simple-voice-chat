@@ -1,6 +1,8 @@
 package de.maxhenkel.voicechat.voice.server;
 
 import de.maxhenkel.voicechat.Voicechat;
+import de.maxhenkel.voicechat.compatibility.Compatibility;
+import de.maxhenkel.voicechat.config.ServerConfig;
 import de.maxhenkel.voicechat.net.*;
 import de.maxhenkel.voicechat.permission.PermissionManager;
 import de.maxhenkel.voicechat.plugins.PluginManager;
@@ -9,22 +11,34 @@ import org.bukkit.entity.Player;
 import org.bukkit.event.player.PlayerQuitEvent;
 
 import javax.annotation.Nullable;
+import java.util.HashSet;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 public class ServerGroupManager {
 
-    private final Map<UUID, Group> groups;
+    private static final long GROUP_CREATION_COOLDOWN_NANOS = 1_000_000_000L;
 
-    public ServerGroupManager() {
+    private final Map<UUID, Group> groups;
+    private final Map<UUID, Long> groupCreationCooldowns;
+    private final Object membershipLock;
+    private final PlayerStateManager states;
+
+    public ServerGroupManager(PlayerStateManager states) {
         groups = new ConcurrentHashMap<>();
+        groupCreationCooldowns = new HashMap<>();
+        membershipLock = new Object();
+        this.states = states;
     }
 
     public void onJoinGroupPacket(Player player, JoinGroupPacket packet) {
-        if (!Voicechat.SERVER_CONFIG.groupsEnabled.get()) {
+        ServerConfig config = Voicechat.SERVER_CONFIG;
+        if (config == null || !config.groupsEnabled.get()) {
             return;
         }
         if (!player.hasPermission(PermissionManager.GROUPS_PERMISSION)) {
@@ -35,7 +49,8 @@ public class ServerGroupManager {
     }
 
     public void onCreateGroupPacket(Player player, CreateGroupPacket packet) {
-        if (!Voicechat.SERVER_CONFIG.groupsEnabled.get()) {
+        ServerConfig config = Voicechat.SERVER_CONFIG;
+        if (config == null || !config.groupsEnabled.get()) {
             return;
         }
         if (!player.hasPermission(PermissionManager.GROUPS_PERMISSION)) {
@@ -50,8 +65,23 @@ public class ServerGroupManager {
             Voicechat.LOGGER.warn("Player {} tried to create a group with an invalid password", player.getDisplayName());
             return;
         }
+        if (!allowGroupCreation(player.getUniqueId())) {
+            return;
+        }
         Group group = new Group(UUID.randomUUID(), packet.getName(), packet.getPassword(), false, false, packet.getType());
         addGroup(group, player);
+    }
+
+    private boolean allowGroupCreation(UUID playerId) {
+        long now = System.nanoTime();
+        synchronized (membershipLock) {
+            Long nextAllowed = groupCreationCooldowns.get(playerId);
+            if (nextAllowed != null && now < nextAllowed) {
+                return false;
+            }
+            groupCreationCooldowns.put(playerId, now + GROUP_CREATION_COOLDOWN_NANOS);
+            return true;
+        }
     }
 
     public void onLeaveGroupPacket(Player player, LeaveGroupPacket packet) {
@@ -60,24 +90,31 @@ public class ServerGroupManager {
 
     public void onPlayerCompatibilityCheckSucceeded(Player player) {
         Voicechat.LOGGER.debug("Synchronizing {} groups with {}", groups.size(), player.getDisplayName());
-        for (Group category : groups.values()) {
-            broadcastAddGroup(category);
+        for (Group group : groups.values()) {
+            NetManager.sendToClient(player, new AddGroupPacket(group.toClientGroup()));
         }
     }
 
     public void onPlayerQuit(PlayerQuitEvent event) {
+        synchronized (membershipLock) {
+            groupCreationCooldowns.remove(event.getPlayer().getUniqueId());
+        }
         cleanupGroups();
     }
 
     private PlayerStateManager getStates() {
-        return Voicechat.SERVER.getServer().getPlayerStateManager();
+        return states;
     }
 
     public void addGroup(Group group, @Nullable Player player) {
         if (PluginManager.instance().onCreateGroup(player, group)) {
             return;
         }
-        groups.put(group.getId(), group);
+        synchronized (membershipLock) {
+            if (groups.putIfAbsent(group.getId(), group) != null) {
+                return;
+            }
+        }
         broadcastAddGroup(group);
 
         if (player == null) {
@@ -85,47 +122,86 @@ public class ServerGroupManager {
         }
 
         PlayerStateManager manager = getStates();
-        manager.setGroup(player, group.getId());
+        PlayerState state;
+        synchronized (membershipLock) {
+            if (groups.get(group.getId()) != group) {
+                return;
+            }
+            state = manager.setGroupState(player, group.getId());
+        }
+        manager.broadcastState(player, state);
 
         NetManager.sendToClient(player, new JoinedGroupPacket(group.getId(), false));
+        cleanupGroups();
     }
 
     public void joinGroup(@Nullable Group group, Player player, String password) {
+        tryJoinGroup(group, player, password);
+    }
+
+    public boolean tryJoinGroup(@Nullable Group group, Player player, String password) {
         if (PluginManager.instance().onJoinGroup(player, group)) {
-            return;
+            return false;
         }
         if (group == null) {
             NetManager.sendToClient(player, new JoinedGroupPacket(null, false));
-            return;
+            return false;
         }
         if (group.getPassword() != null) {
             if (!group.getPassword().equals(password)) {
                 NetManager.sendToClient(player, new JoinedGroupPacket(null, true));
-                return;
+                return false;
             }
         }
         PlayerStateManager manager = getStates();
-        manager.setGroup(player, group.getId());
+        PlayerState state;
+        synchronized (membershipLock) {
+            if (groups.get(group.getId()) != group) {
+                state = null;
+            } else {
+                state = manager.setGroupState(player, group.getId());
+            }
+        }
+        if (state == null) {
+            NetManager.sendToClient(player, new JoinedGroupPacket(null, false));
+            return false;
+        }
+        manager.broadcastState(player, state);
 
         NetManager.sendToClient(player, new JoinedGroupPacket(group.getId(), false));
+        cleanupGroups();
+        return true;
     }
 
     public void leaveGroup(Player player) {
+        tryLeaveGroup(player);
+    }
+
+    public boolean tryLeaveGroup(Player player) {
         if (PluginManager.instance().onLeaveGroup(player)) {
-            return;
+            return false;
         }
 
         PlayerStateManager manager = getStates();
-        manager.setGroup(player, null);
+        PlayerState state;
+        synchronized (membershipLock) {
+            state = manager.setGroupState(player, null);
+        }
+        manager.broadcastState(player, state);
         NetManager.sendToClient(player, new JoinedGroupPacket(null, false));
 
         cleanupGroups();
+        return true;
     }
 
     public void cleanupGroups() {
         PlayerStateManager manager = getStates();
-        List<UUID> usedGroups = manager.getStates().stream().filter(PlayerState::hasGroup).map(PlayerState::getGroup).distinct().collect(Collectors.toList());
-        List<UUID> groupsToRemove = groups.entrySet().stream().filter(entry -> !entry.getValue().isPersistent()).map(Map.Entry::getKey).filter(uuid -> !usedGroups.contains(uuid)).collect(Collectors.toList());
+        Set<UUID> usedGroups;
+        List<UUID> groupsToRemove;
+        synchronized (membershipLock) {
+            usedGroups = manager.getStates().stream().filter(PlayerState::hasGroup).map(PlayerState::getGroup).collect(Collectors.toCollection(HashSet::new));
+            groupsToRemove = groups.entrySet().stream().filter(entry -> !entry.getValue().isPersistent()).map(Map.Entry::getKey).filter(uuid -> !usedGroups.contains(uuid)).collect(Collectors.toList());
+        }
         for (UUID uuid : groupsToRemove) {
             removeGroup(uuid);
         }
@@ -137,16 +213,22 @@ public class ServerGroupManager {
             return false;
         }
 
-        PlayerStateManager manager = getStates();
-        if (manager.getStates().stream().anyMatch(state -> state.hasGroup() && state.getGroup().equals(groupId))) {
-            return false;
-        }
-
         if (PluginManager.instance().onRemoveGroup(group)) {
             return false;
         }
 
-        groups.remove(groupId);
+        synchronized (membershipLock) {
+            if (groups.get(groupId) != group) {
+                return false;
+            }
+            PlayerStateManager manager = getStates();
+            if (manager.getStates().stream().anyMatch(state -> state.hasGroup() && state.getGroup().equals(groupId))) {
+                return false;
+            }
+            if (!groups.remove(groupId, group)) {
+                return false;
+            }
+        }
         broadcastRemoveGroup(groupId);
         // TODO Handle kicking players from group instead of preventing it
         return true;
@@ -159,12 +241,24 @@ public class ServerGroupManager {
 
     private void broadcastAddGroup(Group group) {
         AddGroupPacket packet = new AddGroupPacket(group.toClientGroup());
-        Voicechat.INSTANCE.getServer().getOnlinePlayers().forEach(p -> NetManager.sendToClient(p, packet));
+        Compatibility compatibility = Voicechat.compatibility;
+        if (!Voicechat.ACTIVE || compatibility == null) return;
+        compatibility.runTask(() -> {
+            Voicechat plugin = Voicechat.INSTANCE;
+            if (!Voicechat.ACTIVE || plugin == null || !plugin.isEnabled()) return;
+            plugin.getServer().getOnlinePlayers().forEach(p -> NetManager.sendToClient(p, packet));
+        });
     }
 
     private void broadcastRemoveGroup(UUID group) {
         RemoveGroupPacket packet = new RemoveGroupPacket(group);
-        Voicechat.INSTANCE.getServer().getOnlinePlayers().forEach(p -> NetManager.sendToClient(p, packet));
+        Compatibility compatibility = Voicechat.compatibility;
+        if (!Voicechat.ACTIVE || compatibility == null) return;
+        compatibility.runTask(() -> {
+            Voicechat plugin = Voicechat.INSTANCE;
+            if (!Voicechat.ACTIVE || plugin == null || !plugin.isEnabled()) return;
+            plugin.getServer().getOnlinePlayers().forEach(p -> NetManager.sendToClient(p, packet));
+        });
     }
 
     @Nullable
@@ -182,6 +276,13 @@ public class ServerGroupManager {
 
     public Map<UUID, Group> getGroups() {
         return groups;
+    }
+
+    public void clear() {
+        synchronized (membershipLock) {
+            groups.clear();
+            groupCreationCooldowns.clear();
+        }
     }
 
 }

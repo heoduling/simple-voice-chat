@@ -62,6 +62,7 @@ public class NetworkMessage {
     }
 
     private static final Map<Byte, Class<? extends Packet>> packetRegistry;
+    private static final Map<Class<? extends Packet>, Byte> packetTypes;
 
     static {
         packetRegistry = new HashMap<>();
@@ -75,6 +76,8 @@ public class NetworkMessage {
         packetRegistry.put((byte) 0x8, KeepAlivePacket.class);
         packetRegistry.put((byte) 0x9, ConnectionCheckPacket.class);
         packetRegistry.put((byte) 0xA, ConnectionCheckAckPacket.class);
+        packetTypes = new HashMap<>();
+        packetRegistry.forEach((id, type) -> packetTypes.put(type, id));
     }
 
     @Nullable
@@ -86,7 +89,8 @@ public class NetworkMessage {
             return null;
         }
         UUID playerID = b.readUUID();
-        if (!server.hasSecret(playerID)) {
+        Secret secret = server.getSecret(playerID);
+        if (secret == null) {
             if (PingHandler.onPacket(server, packet.getSocketAddress(), playerID, b)) {
                 return null;
             }
@@ -94,7 +98,7 @@ public class NetworkMessage {
             Voicechat.LOGGER.debug("Player {} does not have a secret", playerID);
             return null;
         }
-        return readFromBytes(packet.getSocketAddress(), server.getSecret(playerID), b.readByteArray(), packet.getTimestamp());
+        return readFromBytes(packet.getSocketAddress(), secret, b.readByteArray(), packet.getTimestamp());
     }
 
     @Nullable
@@ -114,7 +118,7 @@ public class NetworkMessage {
             Voicechat.LOGGER.debug("Got invalid packet ID {}", packetType);
             return null;
         }
-        Packet<? extends Packet<?>> p = packetClass.getDeclaredConstructor().newInstance();
+        Packet<? extends Packet<?>> p = createPacket(packetType);
 
         NetworkMessage message = new NetworkMessage(timestamp);
         message.address = socketAddress;
@@ -124,16 +128,42 @@ public class NetworkMessage {
     }
 
     private static byte getPacketType(Packet<? extends Packet> packet) {
-        for (Map.Entry<Byte, Class<? extends Packet>> entry : packetRegistry.entrySet()) {
-            if (packet.getClass().equals(entry.getValue())) {
-                return entry.getKey();
-            }
+        return packetTypes.getOrDefault(packet.getClass(), (byte) -1);
+    }
+
+    private static Packet<? extends Packet<?>> createPacket(byte packetType) {
+        switch (packetType) {
+            case 0x1:
+                return new MicPacket();
+            case 0x2:
+                return new PlayerSoundPacket();
+            case 0x3:
+                return new GroupSoundPacket();
+            case 0x4:
+                return new LocationSoundPacket();
+            case 0x5:
+                return new AuthenticatePacket();
+            case 0x6:
+                return new AuthenticateAckPacket();
+            case 0x7:
+                return new PingPacket();
+            case 0x8:
+                return new KeepAlivePacket();
+            case 0x9:
+                return new ConnectionCheckPacket();
+            case 0xA:
+                return new ConnectionCheckAckPacket();
+            default:
+                throw new IllegalArgumentException("Unknown packet type " + packetType);
         }
-        return -1;
     }
 
     public byte[] writeServer(Server server, ClientConnection connection) throws InvalidAlgorithmParameterException, NoSuchPaddingException, IllegalBlockSizeException, NoSuchAlgorithmException, BadPaddingException, InvalidKeyException {
-        byte[] payload = write(server.getSecret(connection.getPlayerUUID()));
+        Secret secret = server.getSecret(connection.getPlayerUUID());
+        if (secret == null) {
+            throw new IllegalStateException("Connection has no encryption secret");
+        }
+        byte[] payload = write(secret);
         FriendlyByteBuf buffer = new FriendlyByteBuf(Unpooled.buffer(1 + payload.length));
         buffer.writeByte(MAGIC_BYTE);
         buffer.writeByteArray(payload);
@@ -154,7 +184,9 @@ public class NetworkMessage {
         buffer.writeByte(type);
         packet.toBytes(buffer);
 
-        return secret.encrypt(buffer.array());
+        byte[] bytes = new byte[buffer.readableBytes()];
+        buffer.readBytes(bytes);
+        return secret.encrypt(bytes);
     }
 
 }

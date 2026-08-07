@@ -13,11 +13,13 @@ public class PlayerAudioListenerImpl implements PlayerAudioListener {
     private final UUID playerUuid;
     private final Consumer<SoundPacket> listener;
     private final UUID listenerId;
+    private volatile boolean active;
 
     public PlayerAudioListenerImpl(UUID playerUuid, Consumer<SoundPacket> listener) {
         this.playerUuid = playerUuid;
         this.listener = listener;
         this.listenerId = UUID.randomUUID();
+        this.active = true;
     }
 
     @Override
@@ -32,6 +34,20 @@ public class PlayerAudioListenerImpl implements PlayerAudioListener {
 
     public Consumer<SoundPacket> getListener() {
         return listener;
+    }
+
+    public void accept(SoundPacket packet) {
+        if (active) {
+            listener.accept(packet);
+        }
+    }
+
+    public void deactivate() {
+        active = false;
+    }
+
+    public boolean isOwnedBy(ClassLoader owner) {
+        return listener.getClass().getClassLoader() == owner;
     }
 
     public static class BuilderImpl implements Builder {

@@ -2,28 +2,32 @@ package de.maxhenkel.voicechat.plugins.impl.audiochannel;
 
 import de.maxhenkel.voicechat.api.Position;
 import de.maxhenkel.voicechat.api.ServerLevel;
+import de.maxhenkel.voicechat.api.ServerPlayer;
 import de.maxhenkel.voicechat.api.audiochannel.LocationalAudioChannel;
 import de.maxhenkel.voicechat.api.events.SoundPacketEvent;
 import de.maxhenkel.voicechat.api.packets.MicrophonePacket;
 import de.maxhenkel.voicechat.plugins.impl.PositionImpl;
-import de.maxhenkel.voicechat.plugins.impl.ServerPlayerImpl;
+import de.maxhenkel.voicechat.plugins.impl.ServerLevelImpl;
 import de.maxhenkel.voicechat.voice.common.LocationSoundPacket;
 import de.maxhenkel.voicechat.voice.common.Utils;
 import de.maxhenkel.voicechat.voice.server.Server;
 import de.maxhenkel.voicechat.voice.server.ServerPlayerManager;
-import org.bukkit.World;
-
+import javax.annotation.Nullable;
 import java.util.UUID;
+import java.util.function.Predicate;
 
 public class LocationalAudioChannelImpl extends AudioChannelImpl implements LocationalAudioChannel {
 
-    protected ServerLevel level;
-    protected PositionImpl position;
-    protected float distance;
+    protected final UUID worldId;
+    protected volatile PositionImpl position;
+    protected volatile float distance;
 
     public LocationalAudioChannelImpl(UUID channelId, Server server, ServerLevel level, PositionImpl position) {
         super(channelId, server);
-        this.level = level;
+        if (!(level instanceof ServerLevelImpl)) {
+            throw new IllegalArgumentException("level is not an instance of ServerLevelImpl");
+        }
+        this.worldId = ((ServerLevelImpl) level).getWorldId();
         this.position = position;
         this.distance = Utils.getDefaultDistance();
     }
@@ -54,7 +58,14 @@ public class LocationalAudioChannelImpl extends AudioChannelImpl implements Loca
 
     @Override
     public void send(byte[] opusData) {
-        broadcast(new LocationSoundPacket(channelId, channelId, position.getPosition(), opusData, sequenceNumber.getAndIncrement(), distance, category));
+        if (server.isClosed()) return;
+        PositionImpl currentPosition = position;
+        float currentDistance = distance;
+        @Nullable String currentCategory = category;
+        @Nullable Predicate<ServerPlayer> currentFilter = filter;
+        broadcast(new LocationSoundPacket(channelId, channelId, currentPosition.getPosition(), opusData,
+                        sequenceNumber.getAndIncrement(), currentDistance, currentCategory),
+                currentPosition, currentDistance, currentFilter);
     }
 
     @Override
@@ -64,11 +75,21 @@ public class LocationalAudioChannelImpl extends AudioChannelImpl implements Loca
 
     @Override
     public void flush() {
-        broadcast(new LocationSoundPacket(channelId, channelId, position.getPosition(), new byte[0], sequenceNumber.getAndIncrement(), distance, category));
+        if (server.isClosed()) return;
+        PositionImpl currentPosition = position;
+        float currentDistance = distance;
+        @Nullable String currentCategory = category;
+        @Nullable Predicate<ServerPlayer> currentFilter = filter;
+        broadcast(new LocationSoundPacket(channelId, channelId, currentPosition.getPosition(), new byte[0],
+                        sequenceNumber.getAndIncrement(), currentDistance, currentCategory),
+                currentPosition, currentDistance, currentFilter);
     }
 
-    private void broadcast(LocationSoundPacket packet) {
-        server.broadcast(ServerPlayerManager.getPlayersInRange((World) level.getServerLevel(), position.getPosition(), server.getBroadcastRange(distance), filter == null ? null : player -> filter.test(new ServerPlayerImpl(player))), packet, null, null, null, SoundPacketEvent.SOURCE_PLUGIN);
+    private void broadcast(LocationSoundPacket packet, PositionImpl currentPosition, float currentDistance,
+                           @Nullable Predicate<ServerPlayer> currentFilter) {
+        server.broadcastSnapshots(ServerPlayerManager.getSnapshotsInRange(worldId, currentPosition.getPosition(),
+                        server.getBroadcastRange(currentDistance), currentFilter),
+                packet, null, null, null, SoundPacketEvent.SOURCE_PLUGIN);
     }
 
 }

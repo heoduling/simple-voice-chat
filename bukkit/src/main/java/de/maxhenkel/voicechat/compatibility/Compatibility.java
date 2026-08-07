@@ -2,6 +2,7 @@ package de.maxhenkel.voicechat.compatibility;
 
 import com.mojang.brigadier.arguments.ArgumentType;
 import de.maxhenkel.voicechat.util.Key;
+import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
 
 import javax.annotation.Nullable;
@@ -23,11 +24,15 @@ public interface Compatibility {
 
     void sendStatusMessage(Player player, String key, String... args);
 
-    void sendInviteMessage(Player player, Player commandSender, String groupName, String joinCommand);
+    void sendInviteMessage(Player player, String commandSenderName, String groupName, String joinCommand);
 
     void sendIncompatibleMessage(Player player, String pluginVersion, String pluginName);
 
     void runTask(Runnable runnable);
+
+    void runForPlayer(Player player, Runnable runnable);
+
+    void runForEntity(Entity entity, Runnable runnable);
 
     void scheduleSyncRepeatingTask(Runnable runnable, long delay, long period);
 

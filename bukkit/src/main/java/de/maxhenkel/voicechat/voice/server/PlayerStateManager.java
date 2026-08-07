@@ -1,12 +1,12 @@
 package de.maxhenkel.voicechat.voice.server;
 
 import de.maxhenkel.voicechat.Voicechat;
+import de.maxhenkel.voicechat.compatibility.Compatibility;
 import de.maxhenkel.voicechat.compatibility.PlayerHideEvent;
 import de.maxhenkel.voicechat.compatibility.PlayerShowEvent;
 import de.maxhenkel.voicechat.net.*;
 import de.maxhenkel.voicechat.plugins.PluginManager;
 import de.maxhenkel.voicechat.voice.common.PlayerState;
-import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerJoinEvent;
@@ -55,6 +55,10 @@ public class PlayerStateManager implements Listener {
         Voicechat.LOGGER.debug("Setting default state of {}: {}", event.getPlayer().getName(), state);
     }
 
+    public void ensurePlayer(Player player) {
+        states.computeIfAbsent(player.getUniqueId(), ignored -> defaultDisconnectedState(player));
+    }
+
     public void onPlayerHide(PlayerHideEvent event) {
         RemovePlayerStatePacket packet = new RemovePlayerStatePacket(event.getHiddenPlayer().getUniqueId());
         NetManager.sendToClient(event.getObserver(), packet);
@@ -73,32 +77,53 @@ public class PlayerStateManager implements Listener {
 
     public void broadcastState(@Nullable Player stateOwner, PlayerState state) {
         PlayerStatePacket packet = new PlayerStatePacket(state);
-        for (Player receiver : Voicechat.INSTANCE.getServer().getOnlinePlayers()) {
-            if (stateOwner != null && !Voicechat.compatibility.canSee(receiver, stateOwner)) {
-                continue;
-            }
-            NetManager.sendToClient(receiver, packet);
-        }
+        UUID stateOwnerId = stateOwner == null ? null : stateOwner.getUniqueId();
+        broadcastPacket(packet, stateOwnerId, true);
         PluginManager.instance().onPlayerStateChanged(state);
     }
 
     public void broadcastRemoveState(Player stateOwner) {
         RemovePlayerStatePacket packet = new RemovePlayerStatePacket(stateOwner.getUniqueId());
-        for (Player receiver : Voicechat.INSTANCE.getServer().getOnlinePlayers()) {
-            NetManager.sendToClient(receiver, packet);
-        }
+        broadcastPacket(packet, null, false);
         // Send the default disconnected state to the API when disconnecting
         PluginManager.instance().onPlayerStateChanged(defaultDisconnectedState(stateOwner));
     }
 
+    private void broadcastPacket(Packet<?> packet, @Nullable UUID stateOwnerId, boolean respectVisibility) {
+        Compatibility compatibility = Voicechat.compatibility;
+        if (!Voicechat.ACTIVE || compatibility == null) return;
+        compatibility.runTask(() -> {
+            Voicechat plugin = Voicechat.INSTANCE;
+            if (!Voicechat.ACTIVE || plugin == null || !plugin.isEnabled()
+                    || Voicechat.compatibility != compatibility) return;
+            Player[] receivers = plugin.getServer().getOnlinePlayers().toArray(new Player[0]);
+            for (Player receiver : receivers) {
+                compatibility.runForPlayer(receiver, () -> {
+                    if (!Voicechat.ACTIVE || !receiver.isOnline()
+                            || Voicechat.compatibility != compatibility) return;
+                    if (respectVisibility && stateOwnerId != null) {
+                        ServerPlayerManager.PlayerSnapshot owner = ServerPlayerManager.getSnapshot(stateOwnerId);
+                        if (owner != null && !compatibility.canSee(receiver, owner.getRealPlayer())) return;
+                    }
+                    NetManager.sendToClient(receiver, packet);
+                });
+            }
+        });
+    }
+
     public void onPlayerCompatibilityCheckSucceeded(Player player) {
+        Voicechat plugin = Voicechat.INSTANCE;
+        Compatibility compatibility = Voicechat.compatibility;
+        if (!Voicechat.ACTIVE || plugin == null || compatibility == null) {
+            return;
+        }
         List<PlayerState> stateList = new ArrayList<>(states.size());
         for (PlayerState state : states.values()) {
-            Player otherPlayer = Voicechat.INSTANCE.getServer().getPlayer(state.getUuid());
+            ServerPlayerManager.PlayerSnapshot otherPlayer = ServerPlayerManager.getSnapshot(state.getUuid());
             if (otherPlayer == null) {
                 continue;
             }
-            if (!Voicechat.compatibility.canSee(player, otherPlayer)) {
+            if (!compatibility.canSee(player, otherPlayer.getRealPlayer())) {
                 continue;
             }
             stateList.add(state);
@@ -116,7 +141,8 @@ public class PlayerStateManager implements Listener {
 
         state.setDisconnected(true);
 
-        @Nullable Player player = Bukkit.getPlayer(uuid);
+        ServerPlayerManager.PlayerSnapshot snapshot = ServerPlayerManager.getSnapshot(uuid);
+        @Nullable Player player = snapshot == null ? null : snapshot.getRealPlayer();
 
         broadcastState(player, state);
         Voicechat.LOGGER.debug("Set state of {} to disconnected: {}", uuid, state);
@@ -146,7 +172,7 @@ public class PlayerStateManager implements Listener {
         return new PlayerState(player.getUniqueId(), player.getName(), false, true);
     }
 
-    public void setGroup(Player player, @Nullable UUID group) {
+    PlayerState setGroupState(Player player, @Nullable UUID group) {
         PlayerState state = states.get(player.getUniqueId());
         if (state == null) {
             state = PlayerStateManager.defaultDisconnectedState(player);
@@ -154,12 +180,21 @@ public class PlayerStateManager implements Listener {
         }
         state.setGroup(group);
         states.put(player.getUniqueId(), state);
+        return state;
+    }
+
+    public void setGroup(Player player, @Nullable UUID group) {
+        PlayerState state = setGroupState(player, group);
         broadcastState(player, state);
         Voicechat.LOGGER.debug("Setting group of {}: {}", player.getName(), state);
     }
 
     public Collection<PlayerState> getStates() {
         return states.values();
+    }
+
+    public void clear() {
+        states.clear();
     }
 
 }

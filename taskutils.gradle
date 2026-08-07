@@ -1,0 +1,151 @@
+import javax.inject.Inject
+import org.gradle.api.logging.configuration.ConsoleOutput
+
+interface InjectedExecOps {
+    @Inject ExecOperations getExecOps()
+}
+
+def isWindows() {
+    return System.getProperty('os.name').toLowerCase().contains('windows')
+}
+
+def colorsEnabled() {
+    if (System.getenv('NO_COLOR') != null) {
+        return false
+    }
+    def console = gradle.startParameter.consoleOutput
+    if (console == ConsoleOutput.Plain) {
+        return false
+    }
+    if (console == ConsoleOutput.Rich || console == ConsoleOutput.Verbose) {
+        return true
+    }
+    return System.getenv('TERM') != 'dumb'
+}
+
+def colorize(String colorCode, String message) {
+    if (!colorsEnabled()) {
+        return message
+    }
+    return "\u001B[${colorCode}m${message}\u001B[0m"
+}
+
+def printSuccess(String message) {
+    logger.lifecycle(colorize('32', message))
+}
+
+def printFailure(String message) {
+    logger.lifecycle(colorize('31', message))
+}
+
+def runCommand(String commandName, boolean ignoreExitCode, File workDir, String... command) {
+    def args = []
+    if (isWindows()) {
+        args.addAll(['cmd', '/c'])
+    }
+    args.addAll(command)
+
+    if (workDir != null) {
+        printSuccess("Executing '${commandName}' in ${workDir}")
+    } else {
+        printSuccess("Executing '${commandName}'")
+    }
+
+    def execOps = project.objects.newInstance(InjectedExecOps).execOps
+    def pipeIn = new PipedInputStream()
+    def pipeOut = new PipedOutputStream(pipeIn)
+    def printer = Thread.start {
+        pipeIn.eachLine { line ->
+            logger.lifecycle("    ${line}")
+        }
+    }
+    def result
+    try {
+        result = execOps.exec {
+            if (workDir != null) {
+                workingDir = workDir
+            }
+            commandLine args
+            ignoreExitValue ignoreExitCode
+            standardOutput = pipeOut
+            errorOutput = pipeOut
+        }
+    } finally {
+        pipeOut.close()
+        printer.join()
+    }
+    if (result.exitValue == 0) {
+        printSuccess("Successfully executed '${commandName}'")
+    } else if (ignoreExitCode) {
+        printFailure("Task '${commandName}' failed with exit code ${result.exitValue} - Ignoring")
+    }
+    return result
+}
+
+def runGradleTask(String taskName, boolean ignoreExitCode, File workDir = null) {
+    def args = [isWindows() ? 'gradlew.bat' : './gradlew']
+    args.addAll(taskName.split('\\s+'))
+    return runCommand(taskName, ignoreExitCode, workDir, args as String[])
+}
+
+def runGradleTasks(List<String> mandatoryTasks, List<String> optionalTasks, File workDir = null) {
+    def errored = false
+    def results = []
+    for (String task : mandatoryTasks) {
+        if (errored) {
+            results.add([task, null])
+            continue
+        }
+        def result = runGradleTask(task, true, workDir)
+        if (result.exitValue != 0) {
+            errored = true
+        }
+        results.add([task, result])
+    }
+    for (String task : optionalTasks) {
+        if (errored) {
+            results.add([task, null])
+            continue
+        }
+        def result = runGradleTask(task, true, workDir)
+        results.add([task, result])
+    }
+
+    def succeeded = results.count { it[1] != null && it[1].exitValue == 0 }
+    def failed = results.count { it[1] != null && it[1].exitValue != 0 }
+    def skipped = results.count { it[1] == null }
+
+    logger.lifecycle('')
+    logger.lifecycle('Execution results:')
+    results.forEach {
+        def result = it[1]
+        def status
+        if (result == null) {
+            status = colorize('33', 'SKIPPED')
+        } else if (result.exitValue == 0) {
+            status = colorize('32', 'SUCCESS')
+        } else {
+            status = colorize('31', 'FAILURE')
+        }
+        logger.lifecycle("${it[0]} -> ${status}")
+    }
+    logger.lifecycle('')
+    def summary = "${succeeded} succeeded, ${failed} failed" + (skipped > 0 ? ", ${skipped} skipped" : '')
+    if (failed > 0) {
+        printFailure(summary)
+    } else {
+        printSuccess(summary)
+    }
+}
+
+ext.runGradleTasks = { List<String> mandatoryTasks, List<String> optionalTasks, File workDir = null ->
+    runGradleTasks(mandatoryTasks, optionalTasks, workDir)
+}
+
+ext.runGradleTask = { String taskName, boolean ignoreExitCode, File workDir = null ->
+    runGradleTask(taskName, ignoreExitCode, workDir)
+}
+
+ext.runCommand = { String commandName, boolean ignoreExitCode, File workDir, String... commands ->
+    runCommand(commandName, ignoreExitCode, workDir, commands)
+}

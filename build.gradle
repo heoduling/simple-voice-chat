@@ -9,7 +9,7 @@ plugins {
     id 'xyz.jpenilla.run-paper' version "${run_task_version}" apply false
 }
 
-apply from: "https://raw.githubusercontent.com/henkelmax/mod-gradle-scripts/${mod_gradle_script_version}/taskutils.gradle"
+apply from: rootProject.file("taskutils.gradle")
 
 tasks.register('01-publishBungeeCord') {
     group = 'voicechat'

@@ -6,7 +6,7 @@ import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.builder.RequiredArgumentBuilder;
 import de.maxhenkel.voicechat.Voicechat;
 import de.maxhenkel.voicechat.command.VoiceChatCommands;
-import me.lucko.commodore.Commodore;
+import de.maxhenkel.voicechat.commodore.Commodore;
 
 public class CommodoreCommands {
 

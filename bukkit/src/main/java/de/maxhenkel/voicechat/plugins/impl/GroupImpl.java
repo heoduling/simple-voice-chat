@@ -4,6 +4,7 @@ import de.maxhenkel.voicechat.Voicechat;
 import de.maxhenkel.voicechat.api.Group;
 import de.maxhenkel.voicechat.voice.common.PlayerState;
 import de.maxhenkel.voicechat.voice.server.Server;
+import de.maxhenkel.voicechat.voice.server.ServerVoiceEvents;
 
 import javax.annotation.Nullable;
 import java.util.Objects;
@@ -54,7 +55,8 @@ public class GroupImpl implements Group {
     @Nullable
     public static GroupImpl create(PlayerState state) {
         UUID groupId = state.getGroup();
-        Server server = Voicechat.SERVER.getServer();
+        ServerVoiceEvents events = Voicechat.SERVER;
+        Server server = events == null ? null : events.getServer();
         if (server != null && groupId != null) {
             de.maxhenkel.voicechat.voice.server.Group g = server.getGroupManager().getGroup(groupId);
             if (g != null) {
@@ -153,7 +155,8 @@ public class GroupImpl implements Group {
                 throw new IllegalStateException(String.format("Invalid group name: %s", name));
             }
             GroupImpl group = new GroupImpl(new de.maxhenkel.voicechat.voice.server.Group(id == null ? UUID.randomUUID() : id, name, password, persistent, hidden, type));
-            Server server = Voicechat.SERVER.getServer();
+            ServerVoiceEvents events = Voicechat.SERVER;
+            Server server = events == null ? null : events.getServer();
             if (server != null && persistent) {
                 server.getGroupManager().addGroup(group.getGroup(), null);
             }

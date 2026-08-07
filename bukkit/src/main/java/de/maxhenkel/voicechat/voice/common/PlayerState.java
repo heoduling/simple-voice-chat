@@ -7,12 +7,12 @@ import java.util.UUID;
 
 public class PlayerState {
 
-    private UUID uuid;
-    private String name;
-    private boolean disabled;
-    private boolean disconnected;
+    private volatile UUID uuid;
+    private volatile String name;
+    private volatile boolean disabled;
+    private volatile boolean disconnected;
     @Nullable
-    private UUID group;
+    private volatile UUID group;
 
     public PlayerState(UUID uuid, String name, boolean disabled, boolean disconnected) {
         this.uuid = uuid;
@@ -93,13 +93,18 @@ public class PlayerState {
     }
 
     public void toBytes(FriendlyByteBuf buf) {
-        buf.writeBoolean(disabled);
-        buf.writeBoolean(disconnected);
-        buf.writeUUID(uuid);
-        buf.writeUtf(name);
-        buf.writeBoolean(hasGroup());
-        if (hasGroup()) {
-            buf.writeUUID(group);
+        boolean disabledSnapshot = disabled;
+        boolean disconnectedSnapshot = disconnected;
+        UUID uuidSnapshot = uuid;
+        String nameSnapshot = name;
+        UUID groupSnapshot = group;
+        buf.writeBoolean(disabledSnapshot);
+        buf.writeBoolean(disconnectedSnapshot);
+        buf.writeUUID(uuidSnapshot);
+        buf.writeUtf(nameSnapshot);
+        buf.writeBoolean(groupSnapshot != null);
+        if (groupSnapshot != null) {
+            buf.writeUUID(groupSnapshot);
         }
     }
 

@@ -1,0 +1,1013 @@
+// Constants
+def MIN_GRADLE_VERSION = '8.14.3'
+def FABRIC_MOD_LOADER = 'fabric'
+def QUILT_MOD_LOADER = 'quilt'
+def NEOFORGE_MOD_LOADER = 'neoforge'
+def FORGE_MOD_LOADER = 'forge'
+def BUKKIT_LOADER = 'bukkit'
+def PAPER_LOADER = 'paper'
+
+def DEFAULT_JAVA_VERSION = '17'
+def DEFAULT_MOD_LOADER = FABRIC_MOD_LOADER
+def DEFAULT_MOD_AUTHOR = 'Max Henkel'
+def DEFAULT_RELEASE_TYPE = 'alpha'
+def DEFAULT_MINECRAFT_USER_NAME_PREFIX = 'henkelmax'
+
+def DEFAULT_CONFIGBUILDER_VERSION = '2.0.2'
+//TODO Fail if not explicitly set
+def DEFAULT_FABRIC_LOADER_VERSION = '0.15.1'
+
+// Check for min Gradle version
+if (!satisfiesVersion(getProject().getGradle().getGradleVersion(), MIN_GRADLE_VERSION)) {
+    throw new RuntimeException("Outdated Gradle version, please update to ${MIN_GRADLE_VERSION} or later")
+}
+
+// Variables
+checkProperty('minecraft_version')
+
+checkProperty('mod_id')
+checkProperty('mod_version')
+checkProperty('mod_display_name')
+
+ext.java_version = getOrDefault('java_version', DEFAULT_JAVA_VERSION) as int
+ext.mod_loader = getOrDefault('mod_loader', DEFAULT_MOD_LOADER)
+ext.mod_authors = getOrDefault('mod_authors', [DEFAULT_MOD_AUTHOR], it -> stringToStringList(it))
+ext.minecraft_user_name_prefix = getOrDefault('minecraft_user_name_prefix', DEFAULT_MINECRAFT_USER_NAME_PREFIX)
+ext.random_minecraft_user_name = getOrDefault('random_minecraft_user_name', true, it -> it.toBoolean())
+ext.include_mixins = getOrDefault('include_mixins', true, it -> it.toBoolean()) //TODO Maybe only for Forge/NeoForge, since they are included by default from Fabric
+ext.use_mixins = getOrDefault('use_mixins', false, it -> it.toBoolean()) //TODO Maybe only for Forge/NeoForge, since they are included by default from Fabric
+ext.included_projects = getOrDefault('included_projects', [], it -> stringToStringList(it)).collect {
+    def p = findProject(it)
+    if (p == null) {
+        throw new RuntimeException("Project '${it}' does not exist")
+    }
+    return p.path
+}.findAll {
+    it != project.path
+}
+
+ext.use_shadow = getOrDefault('use_shadow', true, it -> it.toBoolean())
+
+// Libraries
+ext.enable_configbuilder = getOrDefault('enable_configbuilder', false, it -> it.toBoolean())
+if (enable_configbuilder) {
+    ext.configbuilder_version = getOrDefault('configbuilder_version', DEFAULT_CONFIGBUILDER_VERSION)
+}
+
+// Mod loaders
+ext.is_fabric = mod_loader.equalsIgnoreCase(FABRIC_MOD_LOADER)
+ext.is_quilt = mod_loader.equalsIgnoreCase(QUILT_MOD_LOADER)
+ext.is_neoforge = mod_loader.equalsIgnoreCase(NEOFORGE_MOD_LOADER)
+ext.is_forge = mod_loader.equalsIgnoreCase(FORGE_MOD_LOADER)
+ext.is_bukkit = mod_loader.equalsIgnoreCase(BUKKIT_LOADER)
+ext.is_paper = mod_loader.equalsIgnoreCase(PAPER_LOADER)
+
+// Check if shadow is plugin is present
+if (use_shadow) {
+    checkPlugin('com.gradleup.shadow')
+}
+
+// Fabric specific variables
+if (is_fabric) {
+    if (hasPlugin('net.fabricmc.fabric-loom')) {
+        ext.remap_fabric = false
+    } else if (hasPlugin('net.fabricmc.fabric-loom-remap') || hasPlugin('fabric-loom')) {
+        ext.remap_fabric = true
+    } else {
+        throw new RuntimeException("Missing plugin 'net.fabricmc.fabric-loom' or 'net.fabricmc.fabric-loom-remap'")
+    }
+
+    ext.fabric_loader_version = getOrDefault('fabric_loader_version', DEFAULT_FABRIC_LOADER_VERSION)
+    ext.included_fabric_api_modules = getOrDefault('included_fabric_api_modules', [], it -> stringToStringList(it))
+    ext.import_fabric_api = getOrDefault('import_fabric_api', false, it -> it.toBoolean())
+    if (import_fabric_api || included_fabric_api_modules) {
+        checkProperty('fabric_api_version')
+    }
+    // TODO Add access widener path to fabric.mod.json
+    ext.enable_accesswideners = getOrDefault('enable_accesswideners', false, it -> it.toBoolean())
+    ext.add_quilt_supported_tag = getOrDefault('add_quilt_supported_tag', true, it -> it.toBoolean())
+    // Defaults to official mappings if not present
+    ext.fabric_mappings = getOrDefault('fabric_mappings', null)
+    ext.parchment_mappings = getOrDefault('parchment_mappings', null)
+}
+
+// Quilt specific variables
+if (is_quilt) {
+    checkPlugin('org.quiltmc.loom')
+    checkProperty('quilt_loader_version')
+    // TODO Add access widener path to quilt.mod.json
+    ext.enable_accesswideners = getOrDefault('enable_accesswideners', false, it -> it.toBoolean())
+}
+
+// Neoforge specific variables
+if (is_neoforge) {
+    checkPlugin('net.neoforged.moddev')
+    checkProperty('neoforge_version')
+    if (!use_shadow && included_projects) {
+        throw new RuntimeException("Using 'included_projects' with NeoForge requires 'use_shadow' to be enabled")
+    }
+}
+
+// Forge specific variables
+if (is_forge) {
+    checkPlugin('net.minecraftforge.gradle')
+    checkProperty('forge_version')
+    // Merge the resources and classes into the same directory
+    ext.merge_files = getOrDefault('merge_files', true, it -> it.toBoolean())
+    // Defaults to official mappings if not present
+    ext.forge_mappings_channel = getOrDefault('forge_mappings_channel', 'official')
+    ext.forge_mappings_version = getOrDefault('forge_mappings_version', minecraft_version)
+    // Forge uses obfuscated (SRG) names at runtime before 1.20.2, so built jars need to be reobfuscated
+    ext.reobfuscate = !satisfiesVersion(minecraft_version, '1.20.2')
+    if (reobfuscate) {
+        checkPlugin('net.minecraftforge.renamer')
+    }
+}
+
+if (is_neoforge || is_forge) {
+    // TODO Automatically detect the accesstransformer file
+    ext.enable_accesstransformers = getOrDefault('enable_accesstransformers', false, it -> it.toBoolean())
+}
+
+if (is_forge) {
+    if (enable_accesstransformers) {
+        checkPlugin('net.minecraftforge.accesstransformers')
+    }
+}
+
+if (is_bukkit) {
+    checkProperty('bukkit_version')
+}
+
+if (is_paper) {
+    checkPlugin('io.papermc.paperweight.userdev')
+    checkProperty('paper_version')
+}
+
+// Upload
+ext.upload_release_type = getOrDefault('upload_release_type', DEFAULT_RELEASE_TYPE)
+ext.upload_recommended = getOrDefault('upload_recommended', false, it -> it.toBoolean())
+// CurseForge upload
+ext.enable_curseforge_upload = getOrDefault('enable_curseforge_upload', true, it -> it.toBoolean())
+if (enable_curseforge_upload) {
+    checkPlugin('de.maxhenkel.cursegradle')
+    checkProperty('curseforge_upload_id')
+    ext.curseforge_upload_include_prefix = getOrDefault('curseforge_upload_include_prefix', true, it -> it.toBoolean())
+    ext.curseforge_upload_minecraft_versions = getOrDefault('curseforge_upload_minecraft_versions', [], it -> stringToStringList(it))
+    ext.curseforge_upload_environments = getOrDefault('curseforge_upload_environments', ['Client', 'Server'], it -> stringToStringList(it))
+    ext.curseforge_upload_optional_dependencies = getOrDefault('curseforge_upload_optional_dependencies', [], it -> stringToStringList(it))
+    ext.curseforge_upload_required_dependencies = getOrDefault('curseforge_upload_required_dependencies', [], it -> stringToStringList(it))
+}
+// CurseForge Bukkit upload
+ext.enable_curseforge_bukkit_upload = getOrDefault('enable_curseforge_bukkit_upload', false, it -> it.toBoolean())
+if (enable_curseforge_bukkit_upload) {
+    checkPlugin('de.maxhenkel.cursegradle')
+    checkProperty('curseforge_bukkit_upload_id')
+    ext.curseforge_bukkit_upload_minecraft_versions = getOrDefault('curseforge_bukkit_upload_minecraft_versions', [], it -> stringToStringList(it))
+}
+// Commons between CurseForge and CurseForge bukkit
+if (enable_curseforge_upload || enable_curseforge_bukkit_upload) {
+    ext.curseforge_api_key = getApiKey('curseforge_api_key', 'CURSEFORGE_API_KEY')
+}
+// Modrinth upload
+ext.enable_modrinth_upload = getOrDefault('enable_modrinth_upload', true, it -> it.toBoolean())
+if (enable_modrinth_upload) {
+    checkPlugin('com.modrinth.minotaur')
+    checkProperty('modrinth_upload_id')
+    ext.modrinth_upload_include_prefix = getOrDefault('modrinth_upload_include_prefix', true, it -> it.toBoolean())
+    // This property is optional and falls back to the selected loader
+    ext.modrinth_upload_supported_loaders = getOrDefault('modrinth_upload_supported_loaders', [], it -> stringToStringList(it))
+    // This property is optional and falls back to the selected Minecraft version
+    ext.modrinth_upload_supported_game_versions = getOrDefault('modrinth_upload_supported_game_versions', [], it -> stringToStringList(it))
+    ext.modrinth_upload_optional_dependencies = getOrDefault('modrinth_upload_optional_dependencies', [], it -> stringToStringList(it))
+    ext.modrinth_upload_required_dependencies = getOrDefault('modrinth_upload_required_dependencies', [], it -> stringToStringList(it))
+    ext.modrinth_token = getApiKey('modrinth_token', 'MODRINTH_TOKEN')
+}
+// Hangar upload
+ext.enable_hangar_upload = getOrDefault('enable_hangar_upload', false, it -> it.toBoolean())
+if (enable_hangar_upload) {
+    checkPlugin('io.papermc.hangar-publish-plugin')
+    checkProperty('hangar_upload_id')
+    ext.hangar_upload_minecraft_versions = getOrDefault('hangar_upload_minecraft_versions', [], it -> stringToStringList(it))
+    ext.hangar_upload_supported_loaders = getOrDefault('hangar_upload_supported_loaders', ['PAPER'], it -> stringToStringList(it))
+    ext.hangar_upload_dependencies = getOrDefault('hangar_upload_dependencies', [], it -> stringToStringList(it))
+    ext.hangar_api_key = getApiKey('hangar_api_key', 'HANGAR_API_KEY')
+}
+// Mod update
+ext.enable_mod_update = getOrDefault('enable_mod_update', true, it -> it.toBoolean())
+if (enable_mod_update) {
+    checkPlugin('mod-update')
+    ext.mod_update_api_key = getApiKey('mod_update_api_key', 'MOD_UPDATE_API_KEY')
+}
+
+// Mark the evaluation depending on all included projects, so its evaluated after them
+included_projects.forEach({
+    evaluationDependsOn(it)
+})
+
+apply plugin: 'java'
+apply plugin: 'idea'
+
+subprojects {
+    apply plugin: 'java'
+    apply plugin: 'idea'
+}
+
+idea {
+    module {
+        downloadJavadoc = true
+        downloadSources = true
+    }
+}
+
+java {
+    def java_language_version = JavaLanguageVersion.of(java_version)
+    sourceCompatibility = java_language_version
+    targetCompatibility = java_language_version
+}
+
+if (hasProperty('java_toolchain_version')) {
+    java.toolchain.languageVersion = JavaLanguageVersion.of(getProperty('java_toolchain_version') as int)
+}
+
+base {
+    archivesName = getOrDefault('archives_base_name', "${mod_id.replaceAll('_', '-')}-${mod_loader}")
+}
+
+group = getOrDefault('maven_group', "de.maxhenkel.${mod_id.replaceAll('_', '')}")
+version = mod_version
+
+// Run configurations
+// Fabric run configuration
+if (is_fabric) {
+    if (random_minecraft_user_name) {
+        tasks.named('runClient', JavaExec) {
+            doFirst {
+                args = ['--username', "${minecraft_user_name_prefix}${new Random().nextInt(1000)}"]
+            }
+        }
+    } else {
+        tasks.named('runClient', JavaExec) {
+            doFirst {
+                args = ['--username', "${minecraft_user_name_prefix}"]
+            }
+        }
+    }
+
+    // Access widener
+    def accesswidenerFile = file("src/main/resources/${mod_id}.accesswidener")
+    if (enable_accesswideners && accesswidenerFile.exists()) {
+        loom {
+            accessWidenerPath = accesswidenerFile
+        }
+    }
+}
+
+// Quilt run configuration
+if (is_quilt) {
+    if (random_minecraft_user_name) {
+        tasks.named('runClient', JavaExec) {
+            doFirst {
+                args = ['--username', "${minecraft_user_name_prefix}${new Random().nextInt(1000)}"]
+            }
+        }
+    } else {
+        tasks.named('runClient', JavaExec) {
+            doFirst {
+                args = ['--username', "${minecraft_user_name_prefix}"]
+            }
+        }
+    }
+
+    // Access widener
+    // TODO Implement
+    /*def accesswidenerFile = file("src/main/resources/${mod_id}.accesswidener")
+    if (enable_accesswideners && accesswidenerFile.exists()) {
+        loom {
+            accessWidenerPath = accesswidenerFile
+        }
+    }*/
+}
+
+// Neoforge run configuration
+if (is_neoforge) {
+    configurations {
+        minecraftLibrary {}
+        implementation.extendsFrom minecraftLibrary
+
+        // ModClassLoader requires this for < 1.21.9.
+        // ModDevGradle disallows it for >= 1.21.9.
+        if (!satisfiesVersion(minecraft_version, '1.21.9')) {
+            matching { it.name == 'additionalRuntimeClasspath' }.configureEach {
+                extendsFrom minecraftLibrary
+            }
+        }
+    }
+
+    neoForge {
+        version = neoforge_version
+        validateAccessTransformers = true
+
+        runs {
+            configureEach {
+                logLevel = org.slf4j.event.Level.DEBUG
+            }
+
+            client {
+                client()
+                gameDirectory = file('run')
+                if (random_minecraft_user_name) {
+                    programArguments = ['--username', "${minecraft_user_name_prefix}${new Random().nextInt(1000)}"]
+                } else {
+                    programArguments = ['--username', "${minecraft_user_name_prefix}"]
+                }
+            }
+
+            server {
+                server()
+                programArgument '--nogui'
+                gameDirectory = file('run/server')
+            }
+        }
+
+        mods {
+            "${mod_id}" {
+                sourceSet(sourceSets.main)
+
+                included_projects.forEach({
+                    sourceSet project(it).sourceSets.main
+                })
+            }
+        }
+
+        if (enable_accesstransformers) {
+            accessTransformers.from "src/main/resources/META-INF/accesstransformer.cfg"
+        }
+    }
+}
+
+// Forge run configuration
+if (is_forge) {
+    minecraft {
+        mappings channel: forge_mappings_channel, version: forge_mappings_version
+        //TODO Use this instead of "enable_accesstransformers"
+        /*def at = file('src/main/resources/META-INF/accesstransformer.cfg')
+        if (at.exists()) {
+            accessTransformer = at
+        }*/
+        if (enable_accesstransformers) {
+            accessTransformers {
+                accessTransformers = "META-INF/accesstransformer.cfg"
+            }
+        }
+        runs {
+            // bootstraplauncher versions before Minecraft 1.19 don't export their package, which the dev launcher needs to invoke it
+            // Versions older than 1.17 don't use bootstraplauncher and run on Java 8, which doesn't support module arguments
+            if (satisfiesVersion(minecraft_version, '1.17') && !satisfiesVersion(minecraft_version, '1.19')) {
+                configureEach {
+                    jvmArgs '--add-exports=cpw.mods.bootstraplauncher/cpw.mods.bootstraplauncher=ALL-UNNAMED'
+                }
+            }
+            client {
+                workingDir = file('run')
+
+                if (random_minecraft_user_name) {
+                    args = ['--username', "${minecraft_user_name_prefix}${new Random().nextInt(1000)}"]
+                } else {
+                    args = ['--username', "${minecraft_user_name_prefix}"]
+                }
+            }
+            server {
+                workingDir = file('run/server')
+                args = ['--nogui']
+            }
+            data {
+                workingDir = file('run')
+                args '--mod', mod_id, '--all', '--output', file('src/generated/resources/'), '--existing', file('src/main/resources/')
+            }
+            // Added after the runs are created, so the arguments aren't overwritten by the assignments above
+            if (use_mixins) {
+                configureEach {
+                    if (reobfuscate) {
+                        // Reobfuscated versions get their mixin configs from the renamer's mixin support.
+                        // Versions older than 1.13 use launchwrapper, which additionally needs the mixin tweaker.
+                        // The arguments are placed after a '--', so the dev launcher passes them through
+                        // instead of deduplicating the '--tweakClass' argument against the FML tweaker
+                        if (!satisfiesVersion(minecraft_version, '1.13')) {
+                            args '--', '--tweakClass', 'org.spongepowered.asm.launch.MixinTweaker'
+                        }
+                    } else {
+                        args "-mixin.config=${mod_id}.mixins.json"
+                    }
+                }
+            }
+        }
+    }
+
+    sourceSets.main.resources.srcDir 'src/generated/resources'
+
+    configurations {
+        minecraftLibrary {}
+        implementation.extendsFrom minecraftLibrary
+    }
+
+    // Forge isolates the mod's module layer from the plain runtime classpath, so libraries that are
+    // shaded into the production jar have to be added to the Minecraft classpath to be visible in dev
+    afterEvaluate {
+        tasks.matching { it.name in ['runClient', 'runServer', 'runData'] }.configureEach {
+            minecraftClasspath.from(configurations.minecraftLibrary)
+        }
+    }
+}
+
+// Dependency management
+repositories {
+    maven { url = 'https://maven.maxhenkel.de/repository/public' }
+    maven {
+        url = 'https://api.modrinth.com/maven'
+        content {
+            includeGroup "maven.modrinth"
+        }
+    }
+    if (is_fabric) {
+        maven { url = 'https://maven.parchmentmc.org/' }
+    }
+    if (!is_bukkit) {
+        maven { url = 'https://libraries.minecraft.net' }
+    }
+    if (is_forge) {
+        maven minecraft.mavenizer
+        maven fg.forgeMaven
+        maven fg.minecraftLibsMaven
+    }
+    mavenLocal()
+}
+
+dependencies {
+    if (is_fabric) {
+        minecraft "com.mojang:minecraft:${minecraft_version}"
+        // Mappings
+        if (remap_fabric) {
+            if (fabric_mappings != null) {
+                mappings "${fabric_mappings}"
+            } else {
+                if (parchment_mappings != null) {
+                    mappings loom.layered() {
+                        officialMojangMappings()
+                        parchment("org.parchmentmc.data:${parchment_mappings}@zip")
+                    }
+                } else {
+                    mappings loom.officialMojangMappings()
+                }
+
+            }
+        }
+        // Fabric Loader
+        if (remap_fabric) {
+            modImplementation "net.fabricmc:fabric-loader:${fabric_loader_version}"
+        } else {
+            implementation "net.fabricmc:fabric-loader:${fabric_loader_version}"
+        }
+        // Fabric API
+        included_fabric_api_modules.forEach {
+            if (remap_fabric) {
+                include(modImplementation(fabricApi.module(it, fabric_api_version)))
+            } else {
+                include(implementation(fabricApi.module(it, fabric_api_version)))
+            }
+        }
+        if (import_fabric_api) {
+            if (remap_fabric) {
+                modImplementation "net.fabricmc.fabric-api:fabric-api:${fabric_api_version}"
+            } else {
+                implementation "net.fabricmc.fabric-api:fabric-api:${fabric_api_version}"
+            }
+        }
+    }
+
+    if (is_quilt) {
+        minecraft "com.mojang:minecraft:${minecraft_version}"
+        mappings loom.officialMojangMappings()
+        modImplementation("org.quiltmc:quilt-loader:${quilt_loader_version}")
+    }
+
+    if (is_forge) {
+        implementation minecraft.dependency("net.minecraftforge:forge:${minecraft_version}-${forge_version}")
+    }
+
+    if (is_bukkit) {
+        implementation files(rootProject.file('D:/网站下载/voicechat-bukkit-2.6.21.jar'))
+    }
+
+    if (is_paper) {
+        paperweight.paperDevBundle(paper_version)
+    }
+
+    included_projects.forEach({
+        def proj = rootProject.project(it)
+        def hasNamedElements = proj.configurations.names.contains('namedElements')
+        def included_project = hasNamedElements
+                ? dependencies.project(path: it, configuration: 'namedElements')
+                : dependencies.project(path: it)
+        compileOnly(included_project) {
+            transitive false
+        }
+        if (use_shadow) {
+            shadow(included_project) {
+                transitive false
+            }
+        } else {
+            runtimeOnly(included_project) {
+                transitive false
+            }
+        }
+    })
+
+// The overlay is compiled against the exact supplied runtime JAR.
+
+    if (enable_configbuilder && !is_bukkit) {
+        implementation "de.maxhenkel.configbuilder:configbuilder:${configbuilder_version}"
+        if (use_shadow) {
+            shadow "de.maxhenkel.configbuilder:configbuilder:${configbuilder_version}"
+        }
+        if (is_neoforge || is_forge) {
+            minecraftLibrary "de.maxhenkel.configbuilder:configbuilder:${configbuilder_version}"
+        }
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    it.options.encoding = 'UTF-8'
+    if (java_version > 8) {
+        it.options.release = java_version
+    }
+
+    if (!is_neoforge) {
+        included_projects.forEach({
+            source(project(it).sourceSets.main.allSource)
+        })
+    }
+}
+
+processResources {
+    included_projects.forEach({
+        from("${project(it).projectDir}/src/main/resources")
+    })
+}
+
+jar {
+    from('LICENSE') {
+        rename { "${it}_${base.archivesName}" }
+    }
+
+    // Manifest attributes
+    if (is_forge) {
+        def attrs = [
+                'Specification-Title'     : mod_display_name,
+                'Specification-Vendor'    : mod_authors.join(', '),
+                'Specification-Version'   : '1',
+                'Implementation-Title'    : mod_display_name,
+                'Implementation-Version'  : mod_version,
+                'Implementation-Vendor'   : mod_authors.join(', '),
+                'Implementation-Timestamp': new Date().format("yyyy-MM-dd'T'HH:mm:ssZ")
+        ]
+        if (project.hasProperty('mixin_connector_path')) {
+            attrs.put('MixinConnector', mixin_connector_path)
+        } else if (use_mixins) {
+            attrs.put('MixinConfigs', "${mod_id}.mixins.json")
+            // Versions older than 1.13 use launchwrapper, which bootstraps mixin via the tweaker from the jar manifest.
+            // The FML attributes make FML still load the jar as a mod, even though it contains a tweaker
+            if (!satisfiesVersion(minecraft_version, '1.13')) {
+                attrs.put('TweakClass', 'org.spongepowered.asm.launch.MixinTweaker')
+                attrs.put('TweakOrder', '0')
+                attrs.put('FMLCorePluginContainsFMLMod', 'true')
+                attrs.put('ForceLoadAsMod', 'true')
+            }
+        }
+        manifest {
+            attributes(attrs)
+        }
+    }
+}
+
+if (use_shadow) {
+    shadowJar {
+        duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+        configurations = [project.configurations.shadow]
+        if (is_quilt || (is_fabric && remap_fabric) || (is_forge && reobfuscate)) {
+            archiveClassifier = 'shadow-dev'
+        } else {
+            archiveClassifier = ''
+        }
+        if (is_fabric && !remap_fabric) {
+            // For non-remapped Fabric, we need to take the normal jar as base,
+            // since Fabric now adds the include(...) jars in the jar task
+            jar {
+                archiveClassifier = 'dev'
+            }
+            archiveClassifier = ''
+            dependsOn tasks.jar
+            from(zipTree(tasks.jar.archiveFile))
+            def resourcesOutputDir = sourceSets.main.output.resourcesDir
+            exclude { FileTreeElement details ->
+                return details.file.absolutePath.startsWith(resourcesOutputDir.absolutePath)
+            }
+            doLast {
+                delete tasks.jar.archiveFile
+            }
+        }
+        if (enable_configbuilder) {
+            relocate 'de.maxhenkel.configbuilder', "de.maxhenkel.${mod_id}.configbuilder"
+        }
+    }
+}
+
+if (is_fabric && use_shadow) {
+    if (remap_fabric) {
+        remapJar {
+            dependsOn shadowJar
+            inputFile = shadowJar.archiveFile.get()
+        }
+    } else {
+        assemble.dependsOn('shadowJar')
+    }
+}
+
+if (is_quilt && use_shadow) {
+    remapJar {
+        dependsOn shadowJar
+        inputFile = shadowJar.archiveFile.get()
+    }
+}
+
+if (is_neoforge) {
+    if (use_shadow) {
+        assemble.dependsOn('shadowJar')
+    }
+}
+
+if (is_forge) {
+    if (reobfuscate) {
+        if (!use_shadow) {
+            jar {
+                archiveClassifier = 'dev'
+            }
+        }
+        renamer.mappings.from minecraft.dependency.toSrgFile
+        renamer.classes('reobfJar', tasks.named(use_shadow ? 'shadowJar' : 'jar', Jar)) {
+            archiveClassifier = ''
+        }
+        if (use_mixins) {
+            // MixinGradle does not support ForgeGradle 7, so the renamer's mixin support is used instead.
+            // It configures the mixin annotation processor, which generates the refmap
+            // and the mappings needed to reobfuscate the mixin classes.
+            // Note that the mixin annotation processor needs to be added to the 'annotationProcessor' configuration
+            renamer.enableMixinRefmaps {
+                refMap = "${mod_id}.refmap.json"
+                config "${mod_id}.mixins.json"
+                source sourceSets.main
+                jar tasks.named('jar', Jar)
+                if (use_shadow) {
+                    jar tasks.named('shadowJar', Jar)
+                }
+                minecraft.runs.each { run it }
+            }
+            // Reobfuscate with the mixin mappings included, so that shadowed members in mixin classes get renamed
+            tasks.named('reobfJar') {
+                map.setFrom(renamer.mixin.generatedMappings.flatMap { it.output })
+            }
+        }
+        assemble.dependsOn('reobfJar')
+    } else if (use_shadow) {
+        assemble.dependsOn('shadowJar')
+    }
+    if (merge_files) {
+        sourceSets.each {
+            def dir = layout.buildDirectory.dir("sourcesSets/$it.name")
+            it.output.resourcesDir = dir
+            it.java.destinationDirectory = dir
+        }
+    }
+}
+
+if (is_paper) {
+    if (use_shadow) {
+        assemble.dependsOn('shadowJar')
+    }
+}
+
+afterEvaluate {
+    // No idea why, but sometimes Gradle complains about a prepareWorkspace task
+    def prepareWorkspaceTask = tasks.findByName('prepareWorkspace')
+    if (prepareWorkspaceTask == null) {
+        tasks.register('prepareWorkspace') {
+
+        }
+    }
+}
+
+// CurseForge Upload
+if (enable_curseforge_upload) {
+    def curse_game_versions
+    if (curseforge_upload_minecraft_versions) {
+        curse_game_versions = curseforge_upload_minecraft_versions
+    } else {
+        curse_game_versions = [minecraft_version]
+    }
+    curseforge {
+        apiKey = curseforge_api_key
+        project {
+            id = curseforge_upload_id
+            changelogType = 'markdown'
+            changelog = getChangelogFile() ?: ''
+            releaseType = upload_release_type
+            curse_game_versions.forEach {
+                addGameVersion it
+            }
+            curseforge_upload_environments.forEach {
+                addGameVersion it
+            }
+            if (is_fabric) {
+                addGameVersion 'Fabric'
+                if (add_quilt_supported_tag) {
+                    addGameVersion 'Quilt'
+                }
+            }
+            if (is_quilt) {
+                addGameVersion 'Quilt'
+            }
+            if (is_neoforge) {
+                addGameVersion 'NeoForge'
+            }
+            if (is_forge) {
+                addGameVersion 'Forge'
+            }
+            addGameVersion "Java ${java_version}"
+            mainArtifact(getUploadArtefact()) {
+                if (curseforge_upload_include_prefix) {
+                    displayName = "[${mod_loader.toUpperCase()}][${minecraft_version}] ${mod_display_name} ${mod_version}"
+                } else {
+                    displayName = "${mod_display_name} ${mod_version}"
+                }
+                if (curseforge_upload_optional_dependencies || curseforge_upload_required_dependencies) {
+                    relations {
+                        curseforge_upload_optional_dependencies.forEach({
+                            optionalDependency it
+                        })
+                        curseforge_upload_required_dependencies.forEach({
+                            requiredDependency it
+                        })
+                    }
+                }
+            }
+        }
+        options {
+            forgeGradleIntegration = false
+        }
+    }
+    tasks.curseforge.dependsOn(getUploadArtefact())
+}
+
+// CurseForge Bukkit upload
+if (enable_curseforge_bukkit_upload) {
+    curseforge {
+        apiBaseUrl = 'https://dev.bukkit.org'
+        apiKey = curseforge_api_key
+        project {
+            id = curseforge_bukkit_upload_id
+            changelogType = 'markdown'
+            changelog = getChangelogFile() ?: ''
+            releaseType = upload_release_type
+            curseforge_bukkit_upload_minecraft_versions.forEach {
+                addGameVersion it
+            }
+            mainArtifact(getUploadArtefact()) {
+                // TODO Don't hardcode
+                displayName = "[BUKKIT/SPIGOT/PAPER] ${mod_display_name} ${mod_version}"
+            }
+        }
+    }
+    tasks.curseforge.dependsOn(getUploadArtefact())
+}
+
+// Modrinth Upload
+if (enable_modrinth_upload) {
+    tasks.modrinth.configure({
+        group = 'upload'
+    })
+    tasks.modrinthSyncBody.configure({
+        group = 'upload'
+    })
+
+    modrinth {
+        token = modrinth_token
+        projectId = modrinth_upload_id
+        versionNumber = "${mod_loader}-${mod_version}"
+        if (modrinth_upload_include_prefix) {
+            versionName = "[${mod_loader.toUpperCase()}][${minecraft_version}] ${mod_display_name} ${mod_version}"
+        } else {
+            versionName = "${mod_display_name} ${mod_version}"
+        }
+        uploadFile = getUploadArtefact()
+        versionType = upload_release_type.toUpperCase()
+        changelog = getChangelogText()
+        if (modrinth_upload_supported_game_versions) {
+            gameVersions = modrinth_upload_supported_game_versions
+        } else {
+            gameVersions = [minecraft_version]
+        }
+        if (modrinth_upload_supported_loaders) {
+            loaders = modrinth_upload_supported_loaders
+        } else {
+            loaders = [mod_loader]
+        }
+        if (is_fabric && add_quilt_supported_tag) {
+            loaders.add('quilt')
+        }
+        dependencies {
+            modrinth_upload_optional_dependencies.forEach({
+                optional.project it
+            })
+            modrinth_upload_required_dependencies.forEach({
+                required.project it
+            })
+        }
+        def readmeFile = file("${rootDir}/readme.md")
+        if (readmeFile.exists()) {
+            syncBodyFrom = readmeFile.text
+        }
+    }
+    tasks.modrinth.dependsOn(getUploadArtefact())
+}
+
+// Hangar upload
+if (enable_hangar_upload) {
+    tasks.publishAllPublicationsToHangar.configure({
+        group = 'upload'
+    })
+
+    hangarPublish {
+        def changelogString = getChangelogText()
+        def releaseString = upload_release_type.capitalize()
+        publications.register('plugin') {
+            version = "${mod_loader}-${mod_version}"
+            id = hangar_upload_id
+            channel = releaseString
+            changelog = changelogString
+            apiKey = hangar_api_key
+            platforms {
+                hangar_upload_supported_loaders.forEach({
+                    register(it) {
+                        jar = getUploadArtefact().archiveFile
+                        platformVersions = hangar_upload_minecraft_versions
+                        dependencies {
+                            hangar_upload_dependencies.forEach({
+                                hangar(it) {
+                                    required = false
+                                }
+                            })
+                        }
+                    }
+                })
+
+            }
+        }
+    }
+
+    tasks.publishAllPublicationsToHangar.dependsOn(getUploadArtefact())
+    tasks.publishPluginPublicationToHangar.dependsOn(getUploadArtefact())
+}
+
+// Mod Update
+if (enable_mod_update) {
+    def changelog = getChangelogFile()
+    modUpdate {
+        apiKey = mod_update_api_key
+        serverURL = 'https://update.maxhenkel.de/'
+        modID = mod_id
+        gameVersion = minecraft_version
+        modLoader = mod_loader
+        modVersion = mod_version
+        changelogFile = changelog
+        releaseType = upload_release_type
+        tags = upload_recommended ? ['recommended'] : []
+    }
+}
+
+tasks.withType(AbstractTestTask).configureEach {
+    if (it.metaClass.getMetaProperty('failOnNoDiscoveredTests')) {
+        it.failOnNoDiscoveredTests = false
+    }
+}
+
+// Utility functions
+/**
+ * Checks if a property exists or falls back to a default value.
+ *
+ * @param propertyName the name of the property to check
+ * @param defaultValue the default value if the property doesn't exists
+ * @param mutator mutates the return value (Only applied if the property exists)
+ * @return the property
+ */
+def <T> T getOrDefault(String propertyName, T defaultValue = null, Closure mutator = { it }) {
+    if (!project.hasProperty(propertyName)) {
+        return defaultValue
+    }
+    return mutator(getProperty(propertyName))
+}
+
+/**
+ * Throws an exception if a property doesn't exist.
+ *
+ * @param propertyName the name of the property to check
+ */
+def checkProperty(String propertyName) {
+    if (!project.hasProperty(propertyName)) {
+        throw new RuntimeException("No property '${propertyName}' defined")
+    }
+}
+
+/**
+ * Gets an API key from a project property or falls back to an environment variable.
+ * Logs an error if neither is set.
+ *
+ * @param propertyName the name of the property to check
+ * @param environmentVariable the name of the environment variable to fall back to
+ * @return the API key or an empty string
+ */
+def getApiKey(String propertyName, String environmentVariable) {
+    def key = getOrDefault(propertyName, System.getenv(environmentVariable) ?: '')
+    if (key.isEmpty()) {
+        project.logger.error("Missing environment variable ${environmentVariable}")
+    }
+    return key
+}
+
+def hasPlugin(String pluginName) {
+    return getPluginManager().hasPlugin(pluginName)
+}
+
+def checkPlugin(String pluginName) {
+    if (!hasPlugin(pluginName)) {
+        throw new RuntimeException("Missing plugin '${pluginName}'")
+    }
+}
+
+static def stringToStringList(Object value) {
+    if (!(value instanceof String)) {
+        return value
+    }
+    String str = value
+    if (str.isBlank()) {
+        return []
+    }
+    return str.split(',').collect({ it.trim() })
+}
+
+def getChangelogFile() {
+    def changelog = file('changelog.md').exists() ? file('changelog.md') : file("${rootDir}/changelog.md")
+    return changelog.exists() ? changelog : null
+}
+
+def getChangelogText() {
+    def changelog = getChangelogFile()
+    return changelog != null ? changelog.text : ''
+}
+
+def getUploadArtefact() {
+    if (is_quilt) {
+        return remapJar;
+    }
+    if (is_fabric && remap_fabric) {
+        return remapJar;
+    }
+    if (is_forge && reobfuscate) {
+        return reobfJar.output
+    }
+    return use_shadow ? shadowJar : jar
+}
+
+/**
+ * Checks if a version satisfies another version.
+ * Note that this doesnt check any pre-release versions or release candidates.
+ * <code>1.2.3-rc1</code> is treated as <code>1.2.3</code>.
+ *
+ * @param actual the version to check
+ * @param expected the minimum required version
+ * @return true if the version satisfies the expected version
+ */
+static boolean satisfiesVersion(String actual, String expected) {
+    List<Integer> actualParts = actual.split('-', 2)[0].tokenize('.').collect { it.toInteger() }
+    List<Integer> expectedParts = expected.split('-', 2)[0].tokenize('.').collect { it.toInteger() }
+    int maxLength = Math.max(actualParts.size(), expectedParts.size())
+    for (int i = 0; i < maxLength; i++) {
+        int actualPart = i < actualParts.size() ? actualParts.get(i) : 0
+        int expectedPart = i < expectedParts.size() ? expectedParts.get(i) : 0
+        if (actualPart < expectedPart) {
+            return false
+        } else if (actualPart > expectedPart) {
+            return true
+        }
+    }
+    return true
+}

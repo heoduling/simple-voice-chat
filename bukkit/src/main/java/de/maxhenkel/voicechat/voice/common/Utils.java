@@ -1,6 +1,7 @@
 package de.maxhenkel.voicechat.voice.common;
 
 import de.maxhenkel.voicechat.Voicechat;
+import de.maxhenkel.voicechat.config.ServerConfig;
 
 public class Utils {
 
@@ -10,7 +11,8 @@ public class Utils {
      * @return the default voice chat distance
      */
     public static float getDefaultDistance() {
-        return Voicechat.SERVER_CONFIG.voiceChatDistance.get().floatValue();
+        ServerConfig config = Voicechat.SERVER_CONFIG;
+        return config == null ? 0F : config.voiceChatDistance.get().floatValue();
     }
 
 }

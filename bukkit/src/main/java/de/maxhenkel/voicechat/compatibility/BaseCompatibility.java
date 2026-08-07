@@ -3,6 +3,7 @@ package de.maxhenkel.voicechat.compatibility;
 import de.maxhenkel.voicechat.Voicechat;
 import de.maxhenkel.voicechat.util.Key;
 import org.bukkit.Bukkit;
+import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
@@ -11,6 +12,7 @@ import org.bukkit.plugin.Plugin;
 
 import javax.annotation.Nullable;
 import java.lang.reflect.Method;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
 import static de.maxhenkel.voicechat.compatibility.ReflectionUtils.*;
@@ -31,6 +33,8 @@ public abstract class BaseCompatibility implements Compatibility {
     @Nullable
     private Method playerShowEntityEventGetEntity;
     private Consumer<Runnable> runTask;
+    private BiConsumer<Player, Runnable> runPlayerTask;
+    private BiConsumer<Entity, Runnable> runEntityTask;
     private TaskScheduler taskScheduler;
 
     @Override
@@ -70,6 +74,8 @@ public abstract class BaseCompatibility implements Compatibility {
         }
 
         runTask = runnable -> Bukkit.getScheduler().runTask(Voicechat.INSTANCE, runnable);
+        runPlayerTask = (player, runnable) -> runTask.accept(runnable);
+        runEntityTask = (entity, runnable) -> runTask.accept(runnable);
         taskScheduler = new TaskScheduler() {
             @Override
             public void scheduleSyncRepeatingTask(Runnable runnable, long delay, long period) {
@@ -86,6 +92,26 @@ public abstract class BaseCompatibility implements Compatibility {
 
             Method run = getMethod(globalRegionScheduler.getClass(), new String[]{"run"}, new Class[]{Plugin.class, Consumer.class});
             runTask = runnable -> call(run, globalRegionScheduler, Voicechat.INSTANCE, (Consumer<?>) (task) -> runnable.run());
+
+            if (doesMethodExist(Player.class, "getScheduler")) {
+                Method getScheduler = getMethod(Player.class, new String[]{"getScheduler"}, new Class[]{});
+                Method execute = getMethod(getScheduler.getReturnType(), new String[]{"execute"},
+                        new Class[]{Plugin.class, Runnable.class, Runnable.class, long.class});
+                runPlayerTask = (player, runnable) -> {
+                    Object scheduler = call(getScheduler, player);
+                    call(execute, scheduler, Voicechat.INSTANCE, runnable, (Runnable) () -> {}, 1L);
+                };
+            }
+
+            if (doesMethodExist(Entity.class, "getScheduler")) {
+                Method getScheduler = getMethod(Entity.class, new String[]{"getScheduler"}, new Class[]{});
+                Method execute = getMethod(getScheduler.getReturnType(), new String[]{"execute"},
+                        new Class[]{Plugin.class, Runnable.class, Runnable.class, long.class});
+                runEntityTask = (entity, runnable) -> {
+                    Object scheduler = call(getScheduler, entity);
+                    call(execute, scheduler, Voicechat.INSTANCE, runnable, (Runnable) () -> {}, 1L);
+                };
+            }
 
             if (
                     doesMethodExist(globalRegionScheduler.getClass(), "runAtFixedRate", Plugin.class, Consumer.class, long.class, long.class)
@@ -126,6 +152,16 @@ public abstract class BaseCompatibility implements Compatibility {
     @Override
     public void runTask(Runnable runnable) {
         runTask.accept(runnable);
+    }
+
+    @Override
+    public void runForPlayer(Player player, Runnable runnable) {
+        runPlayerTask.accept(player, runnable);
+    }
+
+    @Override
+    public void runForEntity(Entity entity, Runnable runnable) {
+        runEntityTask.accept(entity, runnable);
     }
 
     @Override

@@ -1,6 +1,6 @@
 package de.maxhenkel.voicechat.plugins.impl.config;
 
-import de.maxhenkel.configbuilder.Config;
+import de.maxhenkel.voicechat.configbuilder.Config;
 import de.maxhenkel.voicechat.api.config.ConfigAccessor;
 
 import javax.annotation.Nullable;

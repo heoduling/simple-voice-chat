@@ -11,13 +11,13 @@ import java.util.function.Predicate;
 
 public abstract class AudioChannelImpl implements AudioChannel {
 
-    protected UUID channelId;
-    protected Server server;
-    protected AtomicLong sequenceNumber;
+    protected final UUID channelId;
+    protected final Server server;
+    protected final AtomicLong sequenceNumber;
     @Nullable
-    protected Predicate<ServerPlayer> filter;
+    protected volatile Predicate<ServerPlayer> filter;
     @Nullable
-    protected String category;
+    protected volatile String category;
 
     public AudioChannelImpl(UUID channelId, Server server) {
         this.channelId = channelId;
@@ -49,5 +49,10 @@ public abstract class AudioChannelImpl implements AudioChannel {
     @Override
     public void setCategory(@Nullable String category) {
         this.category = category;
+    }
+
+    public boolean isOwnedBy(ClassLoader owner) {
+        Predicate<ServerPlayer> currentFilter = filter;
+        return currentFilter != null && currentFilter.getClass().getClassLoader() == owner;
     }
 }

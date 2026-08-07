@@ -27,4 +27,8 @@ public class PacketRateLimiter {
     public void onPlayerLoggedOut(Player player) {
         rateLimiters.remove(player.getUniqueId());
     }
+
+    public void clear() {
+        rateLimiters.clear();
+    }
 }

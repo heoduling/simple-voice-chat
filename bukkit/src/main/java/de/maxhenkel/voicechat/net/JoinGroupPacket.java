@@ -3,6 +3,8 @@ package de.maxhenkel.voicechat.net;
 import de.maxhenkel.voicechat.Voicechat;
 import de.maxhenkel.voicechat.util.FriendlyByteBuf;
 import de.maxhenkel.voicechat.util.Key;
+import de.maxhenkel.voicechat.voice.server.Server;
+import de.maxhenkel.voicechat.voice.server.ServerVoiceEvents;
 import org.bukkit.entity.Player;
 
 import javax.annotation.Nullable;
@@ -41,7 +43,11 @@ public class JoinGroupPacket implements Packet<JoinGroupPacket> {
 
     @Override
     public void onPacket(Player player) {
-        Voicechat.SERVER.getServer().getGroupManager().onJoinGroupPacket(player, this);
+        ServerVoiceEvents events = Voicechat.SERVER;
+        Server server = events == null ? null : events.getServer();
+        if (server != null) {
+            server.getGroupManager().onJoinGroupPacket(player, this);
+        }
     }
 
     @Override

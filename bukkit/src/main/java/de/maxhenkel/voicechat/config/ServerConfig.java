@@ -1,7 +1,7 @@
 package de.maxhenkel.voicechat.config;
 
-import de.maxhenkel.configbuilder.ConfigBuilder;
-import de.maxhenkel.configbuilder.entry.ConfigEntry;
+import de.maxhenkel.voicechat.configbuilder.ConfigBuilder;
+import de.maxhenkel.voicechat.configbuilder.entry.ConfigEntry;
 import de.maxhenkel.voicechat.BuildConstants;
 import de.maxhenkel.voicechat.Voicechat;
 

@@ -43,8 +43,8 @@ public class Compatibility1_8 extends JsonMessageBaseCompatibility {
     }
 
     @Override
-    public void sendInviteMessage(Player player, Player commandSender, String groupName, String joinCommand) {
-        sendJsonMessage(player, constructInviteMessage(commandSender, groupName, joinCommand));
+    public void sendInviteMessage(Player player, String commandSenderName, String groupName, String joinCommand) {
+        sendJsonMessage(player, constructInviteMessage(commandSenderName, groupName, joinCommand));
     }
 
     @Override
@@ -52,13 +52,13 @@ public class Compatibility1_8 extends JsonMessageBaseCompatibility {
         sendJsonMessage(player, constructIncompatibleMessage(pluginVersion, pluginName));
     }
 
-    public static String constructInviteMessage(Player commandSender, String groupName, String joinCommand) {
+    public static String constructInviteMessage(String commandSenderName, String groupName, String joinCommand) {
         JSONObject msg = new JSONObject();
         msg.put("translate", "message.voicechat.invite");
 
         JSONArray args = new JSONArray();
 
-        args.put(commandSender.getName());
+        args.put(commandSenderName);
 
         JSONObject groupNameObj = new JSONObject();
         groupNameObj.put("color", "gray");

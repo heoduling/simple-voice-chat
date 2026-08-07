@@ -1,8 +1,10 @@
 package de.maxhenkel.voicechat.integration.placeholderapi;
 
 import de.maxhenkel.voicechat.Voicechat;
+import de.maxhenkel.voicechat.config.Translations;
 import de.maxhenkel.voicechat.voice.common.PlayerState;
 import de.maxhenkel.voicechat.voice.server.Server;
+import de.maxhenkel.voicechat.voice.server.ServerVoiceEvents;
 import me.clip.placeholderapi.expansion.PlaceholderExpansion;
 import org.bukkit.entity.Player;
 import org.jetbrains.annotations.NotNull;
@@ -18,12 +20,14 @@ public class VoicechatExpansion extends PlaceholderExpansion {
 
     @Override
     public @NotNull String getAuthor() {
-        return String.join(", ", Voicechat.INSTANCE.getDescription().getAuthors());
+        Voicechat instance = Voicechat.INSTANCE;
+        return instance == null ? "" : String.join(", ", instance.getDescription().getAuthors());
     }
 
     @Override
     public @NotNull String getVersion() {
-        return Voicechat.INSTANCE.getDescription().getVersion();
+        Voicechat instance = Voicechat.INSTANCE;
+        return instance == null ? "" : instance.getDescription().getVersion();
     }
 
     @Override
@@ -36,13 +40,18 @@ public class VoicechatExpansion extends PlaceholderExpansion {
         if (player == null) {
             return super.onPlaceholderRequest(player, params);
         }
+        ServerVoiceEvents events = Voicechat.SERVER;
+        Translations translations = Voicechat.TRANSLATIONS;
+        if (events == null || translations == null) {
+            return "";
+        }
 
         if (params.equalsIgnoreCase("installed")) {
-            return Voicechat.SERVER.isCompatible(player) ? Voicechat.TRANSLATIONS.placeholderVoicechatInstalled.get() : "";
+            return events.isCompatible(player) ? translations.placeholderVoicechatInstalled.get() : "";
         } else if (params.equalsIgnoreCase("not_installed")) {
-            return !Voicechat.SERVER.isCompatible(player) ? Voicechat.TRANSLATIONS.placeholderVoicechatNotInstalled.get() : "";
+            return !events.isCompatible(player) ? translations.placeholderVoicechatNotInstalled.get() : "";
         } else if (params.equalsIgnoreCase("disabled")) {
-            Server server = Voicechat.SERVER.getServer();
+            Server server = events.getServer();
             if (server == null) {
                 return "";
             }
@@ -53,7 +62,7 @@ public class VoicechatExpansion extends PlaceholderExpansion {
             if (!state.isDisabled()) {
                 return "";
             }
-            return Voicechat.TRANSLATIONS.placeholderVoicechatDisabled.get();
+            return translations.placeholderVoicechatDisabled.get();
         }
 
         return super.onPlaceholderRequest(player, params);

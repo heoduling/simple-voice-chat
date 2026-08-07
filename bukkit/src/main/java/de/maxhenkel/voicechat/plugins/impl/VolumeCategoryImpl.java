@@ -4,6 +4,8 @@ import de.maxhenkel.voicechat.api.VolumeCategory;
 import de.maxhenkel.voicechat.util.FriendlyByteBuf;
 
 import javax.annotation.Nullable;
+import java.nio.charset.StandardCharsets;
+import java.util.Objects;
 import java.util.regex.Pattern;
 
 public class VolumeCategoryImpl implements VolumeCategory {
@@ -22,15 +24,20 @@ public class VolumeCategoryImpl implements VolumeCategory {
     private final int[][] icon;
 
     public VolumeCategoryImpl(String id, String name, @Nullable String nameTranslationKey, @Nullable String description, @Nullable String descriptionTranslationKey, @Nullable int[][] icon) {
+        Objects.requireNonNull(id, "id");
+        Objects.requireNonNull(name, "name");
         if (!ID_REGEX.matcher(id).matches()) {
             throw new IllegalArgumentException("Volume category ID can only contain a-z and _ with a maximum amount of 16 characters");
+        }
+        if (name.getBytes(StandardCharsets.UTF_8).length > 16) {
+            throw new IllegalArgumentException("Volume category name can contain at most 16 UTF-8 bytes");
         }
         this.id = id;
         this.name = name;
         this.nameTranslationKey = nameTranslationKey;
         this.description = description;
         this.descriptionTranslationKey = descriptionTranslationKey;
-        this.icon = icon;
+        this.icon = copyIcon(icon);
     }
 
     @Override
@@ -64,7 +71,25 @@ public class VolumeCategoryImpl implements VolumeCategory {
     @Nullable
     @Override
     public int[][] getIcon() {
-        return icon;
+        return copyIcon(icon);
+    }
+
+    @Nullable
+    private static int[][] copyIcon(@Nullable int[][] icon) {
+        if (icon == null) {
+            return null;
+        }
+        if (icon.length != 16) {
+            throw new IllegalArgumentException("Icon is not 16x16");
+        }
+        int[][] copy = new int[16][16];
+        for (int x = 0; x < icon.length; x++) {
+            if (icon[x] == null || icon[x].length != 16) {
+                throw new IllegalArgumentException("Icon is not 16x16");
+            }
+            System.arraycopy(icon[x], 0, copy[x], 0, 16);
+        }
+        return copy;
     }
 
     public static VolumeCategoryImpl fromBytes(FriendlyByteBuf buf) {

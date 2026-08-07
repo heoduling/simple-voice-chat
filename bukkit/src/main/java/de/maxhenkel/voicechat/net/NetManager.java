@@ -1,7 +1,9 @@
 package de.maxhenkel.voicechat.net;
 
 import de.maxhenkel.voicechat.Voicechat;
+import de.maxhenkel.voicechat.compatibility.Compatibility;
 import de.maxhenkel.voicechat.util.FriendlyByteBuf;
+import de.maxhenkel.voicechat.voice.server.ServerVoiceEvents;
 import io.netty.buffer.Unpooled;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
@@ -12,15 +14,19 @@ import org.bukkit.event.player.PlayerQuitEvent;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
-import java.util.HashSet;
+import java.util.Collections;
 import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class NetManager implements Listener {
 
-    private final Set<String> packets = new HashSet<>();
+    private final Set<String> packets = ConcurrentHashMap.newKeySet();
+    private final Set<String> outgoingPackets = ConcurrentHashMap.newKeySet();
 
     public void onEnable() {
         packets.clear();
+        outgoingPackets.clear();
         Bukkit.getPluginManager().registerEvents(this, Voicechat.INSTANCE);
         try {
             registerIncomingPacket(UpdateStatePacket.class);
@@ -53,25 +59,44 @@ public class NetManager implements Listener {
             Bukkit.getMessenger().unregisterOutgoingPluginChannel(Voicechat.INSTANCE, channel);
         }
         packets.clear();
+        outgoingPackets.clear();
     }
 
     public Set<String> getPackets() {
-        return packets;
+        return Collections.unmodifiableSet(packets);
+    }
+
+    public void synchronizePlayer(Player player) {
+        Compatibility compatibility = Voicechat.compatibility;
+        if (!Voicechat.ACTIVE || compatibility == null) {
+            return;
+        }
+        for (String channel : outgoingPackets) {
+            compatibility.addChannel(player, channel);
+        }
     }
 
     @EventHandler
     public void onPlayerJoin(PlayerJoinEvent event) {
+        Compatibility compatibility = Voicechat.compatibility;
+        if (!Voicechat.ACTIVE || compatibility == null) {
+            return;
+        }
         Set<String> outgoingChannels = Bukkit.getMessenger().getOutgoingChannels(Voicechat.INSTANCE);
         for (String channel : outgoingChannels) {
-            Voicechat.compatibility.addChannel(event.getPlayer(), channel);
+            compatibility.addChannel(event.getPlayer(), channel);
         }
     }
 
     @EventHandler
     public void onPlayerQuit(PlayerQuitEvent event) {
+        Compatibility compatibility = Voicechat.compatibility;
+        if (compatibility == null) {
+            return;
+        }
         Set<String> outgoingChannels = Bukkit.getMessenger().getOutgoingChannels(Voicechat.INSTANCE);
         for (String channel : outgoingChannels) {
-            Voicechat.compatibility.removeChannel(event.getPlayer(), channel);
+            compatibility.removeChannel(event.getPlayer(), channel);
         }
     }
 
@@ -80,33 +105,73 @@ public class NetManager implements Listener {
         String id = c.newInstance().getID().toString();
         packets.add(id);
         Bukkit.getMessenger().registerIncomingPluginChannel(Voicechat.INSTANCE, id, (s, player, bytes) -> {
-            if (!Voicechat.SERVER.getRateLimiter().allow(player.getUniqueId())) {
-                Voicechat.LOGGER.warn("Player {} exceeded packet rate limit", player.getDisplayName());
-                player.kickPlayer(Voicechat.TRANSLATIONS.rateLimitKickMessage.get());
+            Voicechat plugin = Voicechat.INSTANCE;
+            ServerVoiceEvents events = Voicechat.SERVER;
+            Compatibility compatibility = Voicechat.compatibility;
+            if (!Voicechat.ACTIVE || plugin == null || !plugin.isEnabled() || events == null
+                    || compatibility == null) {
+                return;
+            }
+            UUID playerId = player.getUniqueId();
+            if (!events.getRateLimiter().allow(playerId)) {
                 return;
             }
             T packet;
             try {
                 packet = c.newInstance();
+                FriendlyByteBuf buffer = new FriendlyByteBuf(Unpooled.wrappedBuffer(bytes));
+                packet.fromBytes(buffer);
             } catch (Exception e) {
-                Voicechat.LOGGER.error("Failed to create new packet instance of {}", packetClass.getSimpleName(), e);
+                Voicechat.LOGGER.warn("Rejected malformed {} packet from {}", packetClass.getSimpleName(), playerId);
                 return;
             }
-            FriendlyByteBuf buffer = new FriendlyByteBuf(Unpooled.wrappedBuffer(bytes));
-            packet.fromBytes(buffer);
-            packet.onPacket(player);
+            compatibility.runForPlayer(player, () -> {
+                if (!Voicechat.ACTIVE || !player.isOnline() || Voicechat.INSTANCE != plugin
+                        || !plugin.isEnabled() || Voicechat.SERVER != events
+                        || Voicechat.compatibility != compatibility) {
+                    return;
+                }
+                packet.onPacket(player);
+            });
         });
     }
 
     private <T extends Packet<?>> void registerOutgoingPacket(Class<T> packetClass) throws NoSuchMethodException, InvocationTargetException, InstantiationException, IllegalAccessException {
         String id = packetClass.getDeclaredConstructor().newInstance().getID().toString();
         packets.add(id);
+        outgoingPackets.add(id);
         Bukkit.getMessenger().registerOutgoingPluginChannel(Voicechat.INSTANCE, id);
     }
 
     public static void sendToClient(Player player, Packet<?> p) {
-        Voicechat.compatibility.runTask(() -> {
-            if (!Voicechat.SERVER.isCompatible(player)) {
+        sendToClient(player, p, true);
+    }
+
+    /**
+     * Used only for the bounded post-load handshake. It deliberately skips the
+     * compatibility cache because that cache is not populated until the client
+     * completes the UDP handshake.
+     */
+    public static void sendToClientUnchecked(Player player, Packet<?> p) {
+        sendToClient(player, p, false);
+    }
+
+    private static void sendToClient(Player player, Packet<?> p, boolean requireCompatible) {
+        Compatibility compatibility = Voicechat.compatibility;
+        if (compatibility == null) {
+            return;
+        }
+        ServerVoiceEvents currentEvents = Voicechat.SERVER;
+        if (requireCompatible && (currentEvents == null || !currentEvents.isCompatible(player))) {
+            return;
+        }
+        compatibility.runForPlayer(player, () -> {
+            Voicechat plugin = Voicechat.INSTANCE;
+            ServerVoiceEvents events = Voicechat.SERVER;
+            if (!Voicechat.ACTIVE || !player.isOnline() || plugin == null || !plugin.isEnabled()) {
+                return;
+            }
+            if (events == null || (requireCompatible && !events.isCompatible(player))) {
                 return;
             }
             try {
@@ -114,7 +179,7 @@ public class NetManager implements Listener {
                 p.toBytes(buf);
                 byte[] bytes = new byte[buf.readableBytes()];
                 buf.readBytes(bytes);
-                player.sendPluginMessage(Voicechat.INSTANCE, p.getID().toString(), bytes);
+                player.sendPluginMessage(plugin, p.getID().toString(), bytes);
             } catch (Exception e) {
                 Voicechat.LOGGER.error("Failed to send packet to '{}'", player.getName(), e);
             }
@@ -122,11 +187,25 @@ public class NetManager implements Listener {
     }
 
     public static void sendMessage(Player player, String key, String... args) {
-        Voicechat.compatibility.sendTranslationMessage(player, key, args);
+        Compatibility compatibility = Voicechat.compatibility;
+        if (compatibility == null) return;
+        compatibility.runForPlayer(player, () -> {
+            Voicechat plugin = Voicechat.INSTANCE;
+            if (Voicechat.ACTIVE && player.isOnline() && plugin != null && plugin.isEnabled()) {
+                compatibility.sendTranslationMessage(player, key, args);
+            }
+        });
     }
 
     public static void sendStatusMessage(Player player, String key, String... args) {
-        Voicechat.compatibility.sendStatusMessage(player, key, args);
+        Compatibility compatibility = Voicechat.compatibility;
+        if (compatibility == null) return;
+        compatibility.runForPlayer(player, () -> {
+            Voicechat plugin = Voicechat.INSTANCE;
+            if (Voicechat.ACTIVE && player.isOnline() && plugin != null && plugin.isEnabled()) {
+                compatibility.sendStatusMessage(player, key, args);
+            }
+        });
     }
 
 }

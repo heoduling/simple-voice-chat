@@ -4,13 +4,12 @@ import de.maxhenkel.voicechat.BuildConstants;
 import de.maxhenkel.voicechat.Voicechat;
 import de.maxhenkel.voicechat.api.RawUdpPacket;
 import de.maxhenkel.voicechat.api.VoicechatSocket;
-import org.bukkit.Bukkit;
-
+import de.maxhenkel.voicechat.compatibility.Compatibility;
 import java.net.*;
 
 public class VoicechatSocketImpl extends VoicechatSocketBase implements VoicechatSocket {
 
-    private DatagramSocket socket;
+    private volatile DatagramSocket socket;
 
     @Override
     public void open(int port, String bindAddress) throws Exception {
@@ -41,9 +40,16 @@ public class VoicechatSocketImpl extends VoicechatSocketBase implements Voicecha
             socket.setTrafficClass(0x04); // IPTOS_RELIABILITY
         } catch (BindException e) {
             Voicechat.LOGGER.fatal("Failed to run voice chat at UDP port {}, make sure no other application is running at that port", port);
-            Bukkit.getScheduler().runTask(Voicechat.INSTANCE, () -> {
+            Compatibility compatibility = Voicechat.compatibility;
+            if (compatibility == null) {
+                throw e;
+            }
+            compatibility.runTask(() -> {
                 Voicechat.LOGGER.fatal("Disabling {}", BuildConstants.PLUGIN_NAME);
-                Bukkit.getPluginManager().disablePlugin(Voicechat.INSTANCE);
+                Voicechat plugin = Voicechat.INSTANCE;
+                if (Voicechat.ACTIVE && plugin != null && plugin.isEnabled()) {
+                    plugin.getServer().getPluginManager().disablePlugin(plugin);
+                }
             });
             throw e;
         }
@@ -67,7 +73,7 @@ public class VoicechatSocketImpl extends VoicechatSocketBase implements Voicecha
                 Voicechat.LOGGER.info("Voice host is '{}'", host);
             } catch (URISyntaxException e) {
                 Voicechat.LOGGER.warn("Failed to parse voice host", e);
-                Bukkit.shutdown();
+                Voicechat.LOGGER.fatal("Invalid voice host configuration; disabling voice chat plugin");
                 throw e;
             }
         }

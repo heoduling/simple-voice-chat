@@ -23,8 +23,8 @@ public class FallbackCompatibility extends BaseCompatibility {
     }
 
     @Override
-    public void sendInviteMessage(Player player, Player commandSender, String groupName, String joinCommand) {
-        sendTranslationMessage(player, "message.voicechat.invite", commandSender.getName(), groupName, "");
+    public void sendInviteMessage(Player player, String commandSenderName, String groupName, String joinCommand) {
+        sendTranslationMessage(player, "message.voicechat.invite", commandSenderName, groupName, "");
     }
 
     @Override

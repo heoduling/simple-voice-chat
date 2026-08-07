@@ -5,6 +5,8 @@ import de.maxhenkel.voicechat.api.Group;
 import de.maxhenkel.voicechat.plugins.impl.GroupImpl;
 import de.maxhenkel.voicechat.util.FriendlyByteBuf;
 import de.maxhenkel.voicechat.util.Key;
+import de.maxhenkel.voicechat.voice.server.Server;
+import de.maxhenkel.voicechat.voice.server.ServerVoiceEvents;
 import org.bukkit.entity.Player;
 
 import javax.annotation.Nullable;
@@ -48,7 +50,11 @@ public class CreateGroupPacket implements Packet<CreateGroupPacket> {
 
     @Override
     public void onPacket(Player player) {
-        Voicechat.SERVER.getServer().getGroupManager().onCreateGroupPacket(player, this);
+        ServerVoiceEvents events = Voicechat.SERVER;
+        Server server = events == null ? null : events.getServer();
+        if (server != null) {
+            server.getGroupManager().onCreateGroupPacket(player, this);
+        }
     }
 
     @Override

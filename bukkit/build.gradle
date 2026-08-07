@@ -10,9 +10,17 @@ apply plugin: 'de.maxhenkel.cursegradle'
 apply plugin: 'io.papermc.hangar-publish-plugin'
 apply plugin: 'xyz.jpenilla.run-paper'
 
-apply from: "https://raw.githubusercontent.com/henkelmax/mod-gradle-scripts/${mod_gradle_script_version}/mod.gradle"
+apply from: rootProject.file("mod.gradle")
 
-java.toolchain.languageVersion = JavaLanguageVersion.of(21)
+def runtimeJar = project.findProperty('voicechatRuntimeJar')
+        ?: System.getenv('VOICECHAT_RUNTIME_JAR')
+def serverLibraries = project.findProperty('voicechatServerLibraries') ?: System.getenv('VOICECHAT_SERVER_LIBRARIES')
+
+if (!runtimeJar || !serverLibraries) {
+    throw new GradleException('Set VOICECHAT_RUNTIME_JAR and VOICECHAT_SERVER_LIBRARIES before building the Bukkit overlay')
+}
+
+java.toolchain.languageVersion = JavaLanguageVersion.of(25)
 
 repositories {
     mavenCentral()
@@ -22,19 +30,17 @@ repositories {
 }
 
 dependencies {
-    implementation "org.json:json:${json_version}"
-    shadow "org.json:json:${json_version}"
+    // The overlay build accepts the runtime paths as Gradle properties so the
+    // source stays usable on Windows installations with non-ASCII directories.
+    if (runtimeJar) compileOnly files(runtimeJar)
+    if (serverLibraries) compileOnly fileTree(serverLibraries) { include '**/*.jar' }
 
-    implementation "me.lucko:commodore:${commodore_version}"
-    shadow "me.lucko:commodore:${commodore_version}"
-
-    implementation "org.concentus:Concentus:${concentus_version}"
-    shadow "org.concentus:Concentus:${concentus_version}"
-
-    compileOnly "me.clip:placeholderapi:${placeholder_api_version}"
-
-    compileOnly "com.viaversion:viaversion-bukkit:${viaversion_version}"
-    compileOnly "com.viaversion:viaversion-common:${viaversion_version}"
+    // These are compile-time dependencies of the Bukkit sources. The runtime
+    // plugin contains their relocated classes; shadowJar keeps that ABI intact.
+    compileOnly "de.maxhenkel.configbuilder:configbuilder:${configbuilder_version}"
+    compileOnly "org.concentus:Concentus:${concentus_version}"
+    compileOnly "me.lucko:commodore:2.2"
+    compileOnly "me.clip:placeholderapi:2.11.7"
 }
 
 processResources {
@@ -66,7 +72,7 @@ tasks.register('generateBuildConstants', Copy) {
 compileJava.dependsOn generateBuildConstants
 
 tasks.register('generateFallbackTranslations') {
-    def inputFile = project(":common").file('src/main/resources/assets/voicechat/lang/en_us.json')
+    def inputFile = rootProject.file('common/src/main/resources/assets/voicechat/lang/en_us.json')
     def outputFile = file("${layout.buildDirectory.asFile.get()}/generated/java/de/maxhenkel/voicechat/FallbackTranslations.java")
     inputs.file inputFile
     outputs.file outputFile
@@ -103,11 +109,31 @@ ${stringBuilder.toString()}
 }
 compileJava.dependsOn generateFallbackTranslations
 
+// mod.gradle overlays included main sources on every JavaCompile task.
+// Keep the test compiler limited to actual test sources.
+tasks.named('compileTestJava', JavaCompile) {
+    setSource(sourceSets.test.java)
+}
+
+tasks.register('pluginSelfTest', JavaExec) {
+    dependsOn testClasses
+    mainClass = 'de.maxhenkel.voicechat.plugins.PluginEventSnapshotSelfTest'
+    classpath = sourceSets.test.runtimeClasspath + files(runtimeJar)
+    if (serverLibraries) {
+        classpath += fileTree(serverLibraries) { include '**/*.jar' }
+    }
+}
+
+check.dependsOn(pluginSelfTest)
+
 sourceSets.main.java {
     srcDir "${layout.buildDirectory.asFile.get()}/generated/java"
 }
 
 shadowJar {
+    from(zipTree(runtimeJar)) {
+        exclude 'META-INF/MANIFEST.MF'
+    }
     relocate 'org.json', 'de.maxhenkel.voicechat.org.json'
     relocate 'com.google.gson', 'de.maxhenkel.voicechat.gson'
     relocate 'me.lucko.commodore', 'de.maxhenkel.voicechat.commodore'

@@ -2,6 +2,9 @@ package de.maxhenkel.voicechat.command;
 
 import de.maxhenkel.voicechat.BuildConstants;
 import de.maxhenkel.voicechat.Voicechat;
+import de.maxhenkel.voicechat.compatibility.Compatibility;
+import de.maxhenkel.voicechat.config.ServerConfig;
+import de.maxhenkel.voicechat.config.Translations;
 import de.maxhenkel.voicechat.net.NetManager;
 import de.maxhenkel.voicechat.permission.PermissionManager;
 import de.maxhenkel.voicechat.voice.common.PlayerState;
@@ -9,6 +12,7 @@ import de.maxhenkel.voicechat.voice.server.ClientConnection;
 import de.maxhenkel.voicechat.voice.server.Group;
 import de.maxhenkel.voicechat.voice.server.PingManager;
 import de.maxhenkel.voicechat.voice.server.Server;
+import de.maxhenkel.voicechat.voice.server.ServerVoiceEvents;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
@@ -108,12 +112,18 @@ public class VoiceChatCommands implements CommandExecutor, TabCompleter {
             return true;
         }
 
-        if (!Voicechat.SERVER.isCompatible(player)) {
+        ServerVoiceEvents events = Voicechat.SERVER;
+        Server server = events == null ? null : events.getServer();
+        if (server == null) {
+            return true;
+        }
+
+        if (!events.isCompatible(player)) {
             NetManager.sendMessage(commandSender, "message.voicechat.player_no_voicechat", player.getDisplayName(), BuildConstants.PLUGIN_NAME);
             return true;
         }
 
-        ClientConnection clientConnection = Voicechat.SERVER.getServer().getConnections().get(player.getUniqueId());
+        ClientConnection clientConnection = server.getConnections().get(player.getUniqueId());
 
         if (clientConnection == null) {
             NetManager.sendMessage(commandSender, "message.voicechat.client_not_connected");
@@ -122,7 +132,7 @@ public class VoiceChatCommands implements CommandExecutor, TabCompleter {
 
         try {
             NetManager.sendMessage(commandSender, "message.voicechat.sending_ping");
-            Voicechat.SERVER.getServer().getPingManager().sendPing(clientConnection, 500, 10, new PingManager.PingListener() {
+            server.getPingManager().sendPing(clientConnection, 500, 10, new PingManager.PingListener() {
 
                 @Override
                 public void onPong(int attempts, long pingMilliseconds) {
@@ -163,26 +173,40 @@ public class VoiceChatCommands implements CommandExecutor, TabCompleter {
             return true;
         }
 
-        PlayerState state = Voicechat.SERVER.getServer().getPlayerStateManager().getState(commandSender.getUniqueId());
+        ServerVoiceEvents events = Voicechat.SERVER;
+        Server server = events == null ? null : events.getServer();
+        if (server == null) {
+            return true;
+        }
+        PlayerState state = server.getPlayerStateManager().getState(commandSender.getUniqueId());
 
         if (state == null || !state.hasGroup()) {
             NetManager.sendMessage(commandSender, "message.voicechat.not_in_group");
             return true;
         }
 
-        Group group = Voicechat.SERVER.getServer().getGroupManager().getGroup(state.getGroup());
+        Group group = server.getGroupManager().getGroup(state.getGroup());
         if (group == null) {
             return true;
         }
 
-        if (!Voicechat.SERVER.isCompatible(player)) {
+        if (!events.isCompatible(player)) {
             NetManager.sendMessage(commandSender, "message.voicechat.player_no_voicechat", player.getDisplayName(), BuildConstants.PLUGIN_NAME);
             return true;
         }
 
         String passwordSuffix = group.getPassword() == null ? "" : " \"" + group.getPassword() + "\"";
         String cmd = "/voicechat join " + group.getId().toString() + passwordSuffix;
-        Voicechat.compatibility.sendInviteMessage(player, commandSender, group.getName(), cmd);
+        Compatibility compatibility = Voicechat.compatibility;
+        if (compatibility == null) {
+            return true;
+        }
+        String senderName = commandSender.getName();
+        compatibility.runForPlayer(player, () -> {
+            if (player.isOnline() && Voicechat.compatibility == compatibility) {
+                compatibility.sendInviteMessage(player, senderName, group.getName(), cmd);
+            }
+        });
 
         NetManager.sendMessage(commandSender, "message.voicechat.invite_successful", player.getName());
 
@@ -216,7 +240,11 @@ public class VoiceChatCommands implements CommandExecutor, TabCompleter {
             } else {
                 groupName = args[argIndex];
             }
-            groupUUID = getGroupUUID(commandSender, Voicechat.SERVER.getServer(), groupName);
+            Server server = getActiveServer();
+            if (server == null) {
+                return true;
+            }
+            groupUUID = getGroupUUID(commandSender, server, groupName);
         }
 
         if (groupUUID == null) {
@@ -261,12 +289,16 @@ public class VoiceChatCommands implements CommandExecutor, TabCompleter {
     }
 
     private static void joinGroup(Player commandSender, UUID groupID, @Nullable String password) {
-        if (!Voicechat.SERVER_CONFIG.groupsEnabled.get()) {
+        ServerConfig config = Voicechat.SERVER_CONFIG;
+        if (config == null || !config.groupsEnabled.get()) {
             NetManager.sendMessage(commandSender, "message.voicechat.groups_disabled");
             return;
         }
 
-        Server server = Voicechat.SERVER.getServer();
+        Server server = getActiveServer();
+        if (server == null) {
+            return;
+        }
 
         if (!commandSender.hasPermission(PermissionManager.GROUPS_PERMISSION)) {
             NetManager.sendMessage(commandSender, "message.voicechat.no_group_permission");
@@ -280,38 +312,55 @@ public class VoiceChatCommands implements CommandExecutor, TabCompleter {
             return;
         }
 
-        server.getGroupManager().joinGroup(group, commandSender, password);
-        NetManager.sendMessage(commandSender, "message.voicechat.join_successful", group.getName()); //TODO Make group name green
+        if (server.getGroupManager().tryJoinGroup(group, commandSender, password)) {
+            NetManager.sendMessage(commandSender, "message.voicechat.join_successful", group.getName()); //TODO Make group name green
+        }
     }
 
     private boolean leaveCommand(Player commandSender, Command command, String label, String[] args) {
-        if (!Voicechat.SERVER_CONFIG.groupsEnabled.get()) {
+        ServerConfig config = Voicechat.SERVER_CONFIG;
+        if (config == null || !config.groupsEnabled.get()) {
             NetManager.sendMessage(commandSender, "message.voicechat.groups_disabled");
             return true;
         }
 
-        Server server = Voicechat.SERVER.getServer();
+        Server server = getActiveServer();
+        if (server == null) {
+            return true;
+        }
         PlayerState state = server.getPlayerStateManager().getState(commandSender.getUniqueId());
         if (state == null || !state.hasGroup()) {
             NetManager.sendMessage(commandSender, "message.voicechat.not_in_group");
             return true;
         }
 
-        server.getGroupManager().leaveGroup(commandSender);
-        NetManager.sendMessage(commandSender, "message.voicechat.leave_successful");
+        if (server.getGroupManager().tryLeaveGroup(commandSender)) {
+            NetManager.sendMessage(commandSender, "message.voicechat.leave_successful");
+        }
         return true;
     }
 
     private static boolean checkNoVoicechat(CommandSender commandSender) {
+        ServerVoiceEvents events = Voicechat.SERVER;
+        Translations translations = Voicechat.TRANSLATIONS;
+        if (events == null || translations == null) {
+            return true;
+        }
         if (commandSender instanceof Player) {
-            if (Voicechat.SERVER.isCompatible((Player) commandSender)) {
+            if (events.isCompatible((Player) commandSender)) {
                 return false;
             }
-            commandSender.sendMessage(String.format(Voicechat.TRANSLATIONS.voicechatNeededForCommandMessage.get(), "Simple Voice Chat"));
+            commandSender.sendMessage(String.format(translations.voicechatNeededForCommandMessage.get(), "Simple Voice Chat"));
         } else {
-            commandSender.sendMessage(Voicechat.TRANSLATIONS.playerCommandMessage.get());
+            commandSender.sendMessage(translations.playerCommandMessage.get());
         }
         return true;
+    }
+
+    @Nullable
+    private static Server getActiveServer() {
+        ServerVoiceEvents events = Voicechat.SERVER;
+        return events == null ? null : events.getServer();
     }
 
     @Nullable

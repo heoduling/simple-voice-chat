@@ -13,6 +13,8 @@ import java.security.InvalidKeyException;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.util.Arrays;
+import java.nio.ByteBuffer;
+import java.util.concurrent.atomic.AtomicLong;
 
 public class Secret {
 
@@ -22,13 +24,24 @@ public class Secret {
     public static final String CIPHER = "AES/GCM/NoPadding";
 
     private static final SecureRandom RANDOM = new SecureRandom();
+    private static final ThreadLocal<Cipher> CIPHERS = ThreadLocal.withInitial(() -> {
+        try {
+            return Cipher.getInstance(CIPHER);
+        } catch (NoSuchAlgorithmException | NoSuchPaddingException e) {
+            throw new IllegalStateException("AES/GCM cipher is unavailable", e);
+        }
+    });
 
     private final byte[] secret;
     private final SecretKeySpec keySpec;
+    private final int ivPrefix;
+    private final AtomicLong ivCounter;
 
     protected Secret(byte[] secret) {
         this.secret = secret;
         this.keySpec = new SecretKeySpec(secret, "AES");
+        this.ivPrefix = RANDOM.nextInt();
+        this.ivCounter = new AtomicLong();
     }
 
     public static Secret generateNewRandomSecret() {
@@ -59,15 +72,15 @@ public class Secret {
         return keySpec;
     }
 
-    public static byte[] generateIV() {
+    private byte[] nextIV() {
         byte[] iv = new byte[IV_SIZE_BYTES];
-        RANDOM.nextBytes(iv);
+        ByteBuffer.wrap(iv).putInt(ivPrefix).putLong(ivCounter.getAndIncrement());
         return iv;
     }
 
     public byte[] encrypt(byte[] data) throws NoSuchPaddingException, NoSuchAlgorithmException, InvalidAlgorithmParameterException, InvalidKeyException, IllegalBlockSizeException, BadPaddingException {
-        byte[] iv = generateIV();
-        Cipher cipher = Cipher.getInstance(CIPHER);
+        byte[] iv = nextIV();
+        Cipher cipher = CIPHERS.get();
         cipher.init(Cipher.ENCRYPT_MODE, getKeySpec(), new GCMParameterSpec(TAG_LEN_BITS, iv));
         byte[] enc = cipher.doFinal(data);
         byte[] payload = new byte[iv.length + enc.length];
@@ -78,10 +91,9 @@ public class Secret {
 
     public byte[] decrypt(byte[] payload) throws NoSuchPaddingException, NoSuchAlgorithmException, InvalidAlgorithmParameterException, InvalidKeyException, IllegalBlockSizeException, BadPaddingException {
         byte[] iv = Arrays.copyOfRange(payload, 0, IV_SIZE_BYTES);
-        byte[] data = Arrays.copyOfRange(payload, IV_SIZE_BYTES, payload.length);
-        Cipher cipher = Cipher.getInstance(CIPHER);
+        Cipher cipher = CIPHERS.get();
         cipher.init(Cipher.DECRYPT_MODE, getKeySpec(), new GCMParameterSpec(TAG_LEN_BITS, iv));
-        return cipher.doFinal(data);
+        return cipher.doFinal(payload, IV_SIZE_BYTES, payload.length - IV_SIZE_BYTES);
     }
 
     @Override
