@@ -8,7 +8,7 @@ import java.util.regex.Pattern;
 
 public class BukkitVersion {
 
-    public static final Pattern BUKKIT_VERSION_REGEX = Pattern.compile("^(?<major>\\d+)\\.(?<minor>\\d+)(?:\\.(?<patch>\\d+))?-R(?<revision>[\\d.-]+)(?:-SNAPSHOT)?$");
+    public static final Pattern BUKKIT_VERSION_REGEX = Pattern.compile("^(?<major>\\d+)\\.(?<minor>\\d+)(?:\\.(?<patch>\\d+))?(?:-R(?<revision>[\\d.-]+)(?:-SNAPSHOT)?|[.-](?<build>.+))$");
 
     private final int major;
     private final int minor;
@@ -27,6 +27,9 @@ public class BukkitVersion {
         String minor = matcher.group("minor");
         String patch = matcher.group("patch");
         String revision = matcher.group("revision");
+        if (revision == null || revision.isEmpty()) {
+            revision = matcher.group("build");
+        }
         if (patch == null || patch.isEmpty()) {
             patch = "0";
         }
@@ -91,7 +94,7 @@ public class BukkitVersion {
         if (patch != that.patch) {
             return false;
         }
-        return revision.equals(that.revision);
+        return true;
     }
 
     @Override
@@ -99,7 +102,6 @@ public class BukkitVersion {
         int result = major;
         result = 31 * result + minor;
         result = 31 * result + patch;
-        result = 31 * result + (revision != null ? revision.hashCode() : 0);
         return result;
     }
 

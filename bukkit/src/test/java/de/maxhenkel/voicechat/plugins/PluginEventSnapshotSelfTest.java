@@ -1,5 +1,6 @@
 package de.maxhenkel.voicechat.plugins;
 
+import de.maxhenkel.voicechat.BukkitVersion;
 import de.maxhenkel.voicechat.Voicechat;
 import de.maxhenkel.voicechat.api.VoicechatPlugin;
 import de.maxhenkel.voicechat.api.audiochannel.AudioChannel;
@@ -35,6 +36,7 @@ public final class PluginEventSnapshotSelfTest {
     }
 
     public static void main(String[] args) throws Exception {
+        assert26_2VersionParsing();
         VoicechatPlugin owner = () -> "self_test";
         List<String> calls = new ArrayList<>();
         List<Consumer<? extends Event>> consumers = new ArrayList<>();
@@ -60,6 +62,18 @@ public final class PluginEventSnapshotSelfTest {
         assertFailedDynamicRegistrationIsReleased();
         assertLaggingAudioPlayerStops();
         assertHotloadSecretReuse();
+    }
+
+    private static void assert26_2VersionParsing() {
+        BukkitVersion standard = BukkitVersion.parseBukkitVersion("26.2-R0.1-SNAPSHOT");
+        BukkitVersion dotted = BukkitVersion.parseBukkitVersion("26.2.local-SNAPSHOT");
+        BukkitVersion dashed = BukkitVersion.parseBukkitVersion("26.2-local-SNAPSHOT");
+        if (standard == null || dotted == null || dashed == null) {
+            throw new AssertionError("Could not parse a supported 26.2 Bukkit/Paper version format");
+        }
+        if (!standard.equals(dotted) || !standard.equals(dashed)) {
+            throw new AssertionError("Equivalent 26.2 builds did not select the same compatibility");
+        }
     }
 
     private static Consumer<? extends Event> owned(VoicechatPlugin owner, Consumer<TestEvent> delegate, int priority)
