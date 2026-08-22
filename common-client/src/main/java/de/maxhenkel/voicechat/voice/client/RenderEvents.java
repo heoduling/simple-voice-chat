@@ -7,6 +7,7 @@ import de.maxhenkel.voicechat.VoicechatClient;
 import de.maxhenkel.voicechat.gui.onboarding.OnboardingManager;
 import de.maxhenkel.voicechat.intercompatibility.ClientCompatibilityManager;
 import de.maxhenkel.voicechat.plugins.ClientPluginManager;
+import de.maxhenkel.voicechat.voice.common.AudioUtils;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.renderer.RenderPipelines;
@@ -146,48 +147,71 @@ public class RenderEvents {
         stack.scale(0.025F, -0.025F, 0.025F);
 
         if (client != null && client.getTalkCache().isWhispering(entityId)) {
-            renderPlayerIcon(entityId, state.isDiscrete, nameTag, WHISPER_SPEAKER_ICON, stack, collector, state.lightCoords);
+            renderPlayerIcon(entityId, state.isDiscrete, nameTag, WHISPER_SPEAKER_ICON, true, stack, collector, state.lightCoords);
         } else if (client != null && client.getTalkCache().isTalking(entityId)) {
-            renderPlayerIcon(entityId, state.isDiscrete, nameTag, SPEAKER_ICON, stack, collector, state.lightCoords);
+            renderPlayerIcon(entityId, state.isDiscrete, nameTag, SPEAKER_ICON, true, stack, collector, state.lightCoords);
         } else if (manager.isPlayerDisconnected(entityId)) {
-            renderPlayerIcon(entityId, state.isDiscrete, nameTag, DISCONNECT_ICON, stack, collector, state.lightCoords);
+            renderPlayerIcon(entityId, state.isDiscrete, nameTag, DISCONNECT_ICON, false, stack, collector, state.lightCoords);
         } else if (groupId != null && !groupId.equals(manager.getGroupID())) {
-            renderPlayerIcon(entityId, state.isDiscrete, nameTag, GROUP_ICON, stack, collector, state.lightCoords);
+            renderPlayerIcon(entityId, state.isDiscrete, nameTag, GROUP_ICON, false, stack, collector, state.lightCoords);
         } else if (manager.isPlayerDisabled(entityId)) {
-            renderPlayerIcon(entityId, state.isDiscrete, nameTag, SPEAKER_OFF_ICON, stack, collector, state.lightCoords);
+            renderPlayerIcon(entityId, state.isDiscrete, nameTag, SPEAKER_OFF_ICON, false, stack, collector, state.lightCoords);
         }
 
         stack.popPose();
     }
 
-    private void renderPlayerIcon(UUID entityId, boolean discrete, Component component, Identifier texture, PoseStack stack, SubmitNodeCollector collector, int light) {
+    private void renderPlayerIcon(UUID entityId, boolean discrete, Component component, Identifier texture, boolean talking, PoseStack stack, SubmitNodeCollector collector, int light) {
         if (!ClientPluginManager.instance().shouldRenderPlayerIcons(entityId)) {
             return;
         }
         float offsetX = (float) (minecraft.font.width(component) / 2 + 2);
         int alpha = 127;
         float offsetY = -1F;
+        float left = offsetX;
+        float right = offsetX + 10F;
+        float top = offsetY;
+        float bottom = offsetY + 10F;
+        if (talking) {
+            ClientVoicechat client = ClientManager.getClient();
+            double audioLevel = client == null ? AudioUtils.LOWEST_DB : client.getTalkCache().getPlayerAudioLevel(entityId);
+            float volume = (float) AudioUtils.dbToPerc(audioLevel);
+            double phase = System.currentTimeMillis() * 0.012D + entityId.hashCode();
+            float scale = 1F + volume * 0.15F + (float) Math.sin(phase) * 0.02F;
+            float jitterX = (float) Math.sin(phase * 1.7D) * 0.3F;
+            float jitterY = (float) Math.cos(phase * 1.3D) * 0.2F;
+            float centerX = offsetX + 5F;
+            float centerY = offsetY + 5F;
+            left = centerX + (offsetX - centerX) * scale + jitterX;
+            right = centerX + (offsetX + 10F - centerX) * scale + jitterX;
+            top = centerY + (offsetY - centerY) * scale + jitterY;
+            bottom = centerY + (offsetY + 10F - centerY) * scale + jitterY;
+        }
+        final float iconLeft = left;
+        final float iconRight = right;
+        final float iconTop = top;
+        final float iconBottom = bottom;
         TextureAtlas guiAtlas = minecraft.getAtlasManager().getAtlasOrThrow(AtlasIds.GUI);
         TextureAtlasSprite sprite = guiAtlas.getSprite(texture);
         collector.submitCustomGeometry(stack, RenderTypes.text(sprite.atlasLocation()), (pose, c) -> {
             if (discrete) {
-                vertex(c, pose, offsetX, 10F + offsetY, 0F, sprite.getU0(), sprite.getV1(), alpha, light);
-                vertex(c, pose, offsetX + 10F, 10F + offsetY, 0F, sprite.getU1(), sprite.getV1(), alpha, light);
-                vertex(c, pose, offsetX + 10F, offsetY, 0F, sprite.getU1(), sprite.getV0(), alpha, light);
-                vertex(c, pose, offsetX, offsetY, 0F, sprite.getU0(), sprite.getV0(), alpha, light);
+                vertex(c, pose, iconLeft, iconBottom, 0F, sprite.getU0(), sprite.getV1(), alpha, light);
+                vertex(c, pose, iconRight, iconBottom, 0F, sprite.getU1(), sprite.getV1(), alpha, light);
+                vertex(c, pose, iconRight, iconTop, 0F, sprite.getU1(), sprite.getV0(), alpha, light);
+                vertex(c, pose, iconLeft, iconTop, 0F, sprite.getU0(), sprite.getV0(), alpha, light);
             } else {
-                vertex(c, pose, offsetX, 10F + offsetY, 0F, sprite.getU0(), sprite.getV1(), light);
-                vertex(c, pose, offsetX + 10F, 10F + offsetY, 0F, sprite.getU1(), sprite.getV1(), light);
-                vertex(c, pose, offsetX + 10F, offsetY, 0F, sprite.getU1(), sprite.getV0(), light);
-                vertex(c, pose, offsetX, offsetY, 0F, sprite.getU0(), sprite.getV0(), light);
+                vertex(c, pose, iconLeft, iconBottom, 0F, sprite.getU0(), sprite.getV1(), light);
+                vertex(c, pose, iconRight, iconBottom, 0F, sprite.getU1(), sprite.getV1(), light);
+                vertex(c, pose, iconRight, iconTop, 0F, sprite.getU1(), sprite.getV0(), light);
+                vertex(c, pose, iconLeft, iconTop, 0F, sprite.getU0(), sprite.getV0(), light);
             }
         });
         if (!discrete) {
             collector.submitCustomGeometry(stack, RenderTypes.textSeeThrough(sprite.atlasLocation()), (pose, c) -> {
-                vertex(c, pose, offsetX, 10F + offsetY, 0F, sprite.getU0(), sprite.getV1(), alpha, light);
-                vertex(c, pose, offsetX + 10F, 10F + offsetY, 0F, sprite.getU1(), sprite.getV1(), alpha, light);
-                vertex(c, pose, offsetX + 10F, offsetY, 0F, sprite.getU1(), sprite.getV0(), alpha, light);
-                vertex(c, pose, offsetX, offsetY, 0F, sprite.getU0(), sprite.getV0(), alpha, light);
+                vertex(c, pose, iconLeft, iconBottom, 0F, sprite.getU0(), sprite.getV1(), alpha, light);
+                vertex(c, pose, iconRight, iconBottom, 0F, sprite.getU1(), sprite.getV1(), alpha, light);
+                vertex(c, pose, iconRight, iconTop, 0F, sprite.getU1(), sprite.getV0(), alpha, light);
+                vertex(c, pose, iconLeft, iconTop, 0F, sprite.getU0(), sprite.getV0(), alpha, light);
             });
         }
     }
