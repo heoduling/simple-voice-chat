@@ -177,7 +177,7 @@ public class RenderEvents {
             double audioLevel = client == null ? AudioUtils.LOWEST_DB : client.getTalkCache().getPlayerAudioLevel(entityId);
             float volume = (float) AudioUtils.dbToPerc(audioLevel);
             double phase = System.currentTimeMillis() * 0.012D + entityId.hashCode();
-            float scale = 1F + volume * 0.15F + (float) Math.sin(phase) * 0.02F;
+            float scale = 1F + volume * 0.15F + ((float) Math.sin(phase) + 1F) * 0.01F;
             float jitterX = (float) Math.sin(phase * 1.7D) * 0.3F;
             float jitterY = (float) Math.cos(phase * 1.3D) * 0.2F;
             float centerX = offsetX + 5F;
