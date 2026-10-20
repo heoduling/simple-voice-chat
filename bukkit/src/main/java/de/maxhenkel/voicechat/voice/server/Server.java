@@ -305,6 +305,7 @@ public class Server extends Thread {
         }
         secrets.remove(playerUUID);
         hotloadSecretExpiries.remove(playerUUID);
+        TalkingState.clear(playerUUID);
         PluginManager.instance().onPlayerDisconnected(playerUUID);
     }
 
@@ -332,8 +333,10 @@ public class Server extends Thread {
         hotloadSecretExpiries.clear();
         pingManager.clear();
         playerStateManager.clear();
+        groupManager.rememberClientGroups();
         groupManager.clear();
         categoryManager.clear();
+        TalkingState.clearAll();
         CooldownTimer.clear();
         PluginManager pluginManager = PluginManager.getIfInitialized();
         if (pluginManager != null) pluginManager.onServerStopped();
@@ -522,8 +525,10 @@ public class Server extends Thread {
             return;
         }
         PluginManager pluginManager = PluginManager.instance();
-        if (!pluginManager.hasEventListeners(de.maxhenkel.voicechat.api.events.MicrophonePacketEvent.class)
-                || !pluginManager.onMicPacket(player, state, packet)) {
+        boolean cancelled = pluginManager.hasEventListeners(de.maxhenkel.voicechat.api.events.MicrophonePacketEvent.class)
+                && pluginManager.onMicPacket(player, state, packet);
+        if (!cancelled) {
+            TalkingState.mark(playerUuid);
             processMicPacket(player, state, packet);
         }
     }
@@ -770,6 +775,10 @@ public class Server extends Thread {
             sendPacketRaw(packet, connection);
             return true;
         } catch (Exception e) {
+            // Reload/quit can retire a connection after a keepalive iteration selected it.
+            // Its failed send is a normal terminal outcome; retain errors for live sessions.
+            if (closed || (connections.get(connection.getPlayerUUID()) != connection
+                    && unCheckedConnections.get(connection.getPlayerUUID()) != connection)) return false;
             CooldownTimer.run("send-error-" + connection.getPlayerUUID(), 30_000L, () ->
                     Voicechat.LOGGER.error("Failed to send voice chat packet to {}", connection.getPlayerUUID(), e));
             return false;

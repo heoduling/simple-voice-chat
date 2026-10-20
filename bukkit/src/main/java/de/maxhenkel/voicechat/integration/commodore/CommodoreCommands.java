@@ -18,6 +18,7 @@ public class CommodoreCommands {
         }
         LiteralArgumentBuilder<?> literalBuilder = LiteralArgumentBuilder.literal(VoiceChatCommands.VOICECHAT_COMMAND)
                 .then(LiteralArgumentBuilder.literal("help"))
+                .then(LiteralArgumentBuilder.literal("reload"))
                 .then(LiteralArgumentBuilder.literal("test").then(RequiredArgumentBuilder.argument("target", playerArgument)))
                 .then(LiteralArgumentBuilder.literal("invite").then(RequiredArgumentBuilder.argument("target", playerArgument)))
                 .then(LiteralArgumentBuilder.literal("join").then(RequiredArgumentBuilder.argument("group_id", uuidArgument)))

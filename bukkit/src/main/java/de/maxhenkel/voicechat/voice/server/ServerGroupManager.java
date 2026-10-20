@@ -28,12 +28,14 @@ public class ServerGroupManager {
     private final Map<UUID, Long> groupCreationCooldowns;
     private final Object membershipLock;
     private final PlayerStateManager states;
+    private final HotloadGroupCleanup hotloadCleanup;
 
     public ServerGroupManager(PlayerStateManager states) {
         groups = new ConcurrentHashMap<>();
         groupCreationCooldowns = new HashMap<>();
         membershipLock = new Object();
         this.states = states;
+        hotloadCleanup = new HotloadGroupCleanup();
     }
 
     public void onJoinGroupPacket(Player player, JoinGroupPacket packet) {
@@ -89,6 +91,7 @@ public class ServerGroupManager {
     }
 
     public void onPlayerCompatibilityCheckSucceeded(Player player) {
+        clearPreviousGroups(player);
         Voicechat.LOGGER.debug("Synchronizing {} groups with {}", groups.size(), player.getDisplayName());
         for (Group group : groups.values()) {
             NetManager.sendToClient(player, new AddGroupPacket(group.toClientGroup()));
@@ -96,6 +99,7 @@ public class ServerGroupManager {
     }
 
     public void onPlayerQuit(PlayerQuitEvent event) {
+        hotloadCleanup.forget(event.getPlayer().getUniqueId());
         synchronized (membershipLock) {
             groupCreationCooldowns.remove(event.getPlayer().getUniqueId());
         }
@@ -225,6 +229,8 @@ public class ServerGroupManager {
             if (manager.getStates().stream().anyMatch(state -> state.hasGroup() && state.getGroup().equals(groupId))) {
                 return false;
             }
+            // Record before removing the registry entry: disable can cancel the queued broadcast.
+            hotloadCleanup.rememberRemoval(ServerPlayerManager.getPlayerIds(), groupId);
             if (!groups.remove(groupId, group)) {
                 return false;
             }
@@ -257,7 +263,11 @@ public class ServerGroupManager {
         compatibility.runTask(() -> {
             Voicechat plugin = Voicechat.INSTANCE;
             if (!Voicechat.ACTIVE || plugin == null || !plugin.isEnabled()) return;
-            plugin.getServer().getOnlinePlayers().forEach(p -> NetManager.sendToClient(p, packet));
+            plugin.getServer().getOnlinePlayers().forEach(p -> compatibility.runForPlayer(p, () -> {
+                if (NetManager.sendToClientOnOwner(p, packet)) {
+                    hotloadCleanup.removalSent(p.getUniqueId(), group);
+                }
+            }));
         });
     }
 
@@ -277,6 +287,26 @@ public class ServerGroupManager {
     public Map<UUID, Group> getGroups() {
         return groups;
     }
+
+    /** Called on the player's entity owner before sending a new handshake or group list. */
+    public void clearPreviousGroups(Player player) {
+        Set<UUID> previous = hotloadCleanup.get(player.getUniqueId());
+        boolean resetMembership = hotloadCleanup.needsMembershipReset(player.getUniqueId());
+        if (previous.isEmpty() && !resetMembership) return;
+        for (UUID group : previous) {
+            if (!NetManager.sendToClientOnOwner(player, new RemoveGroupPacket(group))) return;
+        }
+        if (resetMembership && !NetManager.sendToClientOnOwner(player, new JoinedGroupPacket(null, false))) return;
+        hotloadCleanup.complete(player.getUniqueId(), previous);
+    }
+
+    public void rememberClientGroups() {
+        synchronized (membershipLock) {
+            hotloadCleanup.save(ServerPlayerManager.getPlayerIds(), List.copyOf(groups.keySet()));
+        }
+    }
+
+    public void retainOnlineCleanup(List<UUID> players) { hotloadCleanup.retainPlayers(players); }
 
     public void clear() {
         synchronized (membershipLock) {

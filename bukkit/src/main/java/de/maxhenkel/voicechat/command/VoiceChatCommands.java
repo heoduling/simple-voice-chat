@@ -33,6 +33,19 @@ public class VoiceChatCommands implements CommandExecutor, TabCompleter {
 
     @Override
     public boolean onCommand(CommandSender commandSender, Command command, String label, String[] args) {
+        if (args.length == 0 || args[0].equalsIgnoreCase("help")) {
+            return helpCommand(commandSender, command, label, args);
+        }
+        if (args.length == 1 && args[0].equalsIgnoreCase("reload")) {
+            if (!commandSender.hasPermission(PermissionManager.ADMIN_PERMISSION)) {
+                commandSender.sendMessage("[voicechat] 你没有重载语音插件的权限。");
+            } else if (Voicechat.ACTIVE && Voicechat.INSTANCE != null && getActiveServer() != null) {
+                Voicechat.INSTANCE.reloadConfiguration(commandSender);
+            } else {
+                commandSender.sendMessage("[voicechat] 语音服务尚未就绪，无法重载。");
+            }
+            return true;
+        }
         if (checkNoVoicechat(commandSender)) {
             return true;
         }
@@ -48,6 +61,7 @@ public class VoiceChatCommands implements CommandExecutor, TabCompleter {
                 if (commandSender.hasPermission(PermissionManager.ADMIN_PERMISSION)) {
                     return testCommand(sender, command, label, args);
                 } else {
+                    commandSender.sendMessage("[voicechat] 你没有检测语音连接的权限。");
                     return true;
                 }
             } else if (args[0].equalsIgnoreCase("invite")) {
@@ -65,7 +79,9 @@ public class VoiceChatCommands implements CommandExecutor, TabCompleter {
     @Override
     public List<String> onTabComplete(@NotNull CommandSender commandSender, @NotNull Command command, @NotNull String label, @NotNull String[] args) {
         if (args.length == 1) {
-            return tabCompleteList(args[0], Arrays.asList("help", "test", "invite", "join", "leave"));
+            return tabCompleteList(args[0], commandSender.hasPermission(PermissionManager.ADMIN_PERMISSION)
+                    ? Arrays.asList("help", "test", "invite", "join", "leave", "reload")
+                    : Arrays.asList("help", "test", "invite", "join", "leave"));
         }
 
         if (args.length == 2) {
@@ -91,18 +107,34 @@ public class VoiceChatCommands implements CommandExecutor, TabCompleter {
         return list.stream().filter(s -> s.startsWith(arg)).collect(Collectors.toList());
     }
 
-    private boolean helpCommand(Player commandSender, Command command, String label, String[] args) {
-        commandSender.sendMessage("/voicechat [help]");
-        commandSender.sendMessage("/voicechat [test] <target>");
-        commandSender.sendMessage("/voicechat [invite] <target>");
-        commandSender.sendMessage("/voicechat [join] <group> [<password>]");
-        commandSender.sendMessage("/voicechat [leave]");
+    private boolean helpCommand(CommandSender commandSender, Command command, String label, String[] args) {
+        commandSender.sendMessage("[voicechat] 简单语音聊天 — 中文使用帮助");
+        commandSender.sendMessage("/voicechat help — 查看本帮助，控制台和未安装 Mod 的玩家均可使用。");
+        commandSender.sendMessage("/voicechat invite <玩家> — 邀请玩家加入你当前所在的语音群组。");
+        commandSender.sendMessage("/voicechat join <群组名称或UUID> [密码] — 加入群组，含空格的名称请用双引号包围。");
+        commandSender.sendMessage("/voicechat leave — 离开当前语音群组。");
+        commandSender.sendMessage("建群请在客户端 Mod 的群组界面操作；加入、离开、邀请需在游戏内安装兼容的 Mod。");
+        if (commandSender.hasPermission(PermissionManager.ADMIN_PERMISSION)) {
+            commandSender.sendMessage("/voicechat test <玩家> — 检测该玩家的 UDP 语音连接与响应耗时。");
+            commandSender.sendMessage("/voicechat reload — 重读配置并让在线语音重连，保留群组和成员关系。");
+            commandSender.sendMessage("管理权限：voicechat.admin（OP 默认拥有）。");
+            commandSender.sendMessage("网络配置：plugins/voicechat/voicechat-server.properties；修改 voice_host 后 reload 生效。");
+            commandSender.sendMessage("port、bind_address、tcp_rate_limit 修改后需重启插件；无效重载不会部分应用配置。");
+            commandSender.sendMessage("变量显示：plugins/voicechat/translations.properties；支持原样传递 MiniMessage 给显示插件。");
+            commandSender.sendMessage("%voicechat_talking_icon% — 正在说话的图标，默认 🎙，停说时默认隐藏。");
+            commandSender.sendMessage("%voicechat_talking% / %voicechat_is_talking% — 正在说话时默认 1，否则 0。");
+            commandSender.sendMessage("%voicechat_installed% / %voicechat_not_installed% — 已通过/未通过 Mod 兼容性检查时的自定义显示。");
+            commandSender.sendMessage("%voicechat_disabled% — 玩家主动禁用语音时的自定义显示。");
+            commandSender.sendMessage("未装/不兼容提示示例：placeholder_api_voicechat_not_installed=<red>🔇</red>。");
+            commandSender.sendMessage("新配置项会在启用或 reload 时自动补齐，无需手工复制；自定义值保留。");
+        }
         return true;
     }
 
     private boolean testCommand(Player commandSender, Command command, String label, String[] args) {
         if (args.length < 2) {
-            return false;
+            commandSender.sendMessage("[voicechat] 用法：/voicechat test <玩家>");
+            return true;
         }
 
         Player player = parsePlayer(commandSender, args[1]);
@@ -163,7 +195,8 @@ public class VoiceChatCommands implements CommandExecutor, TabCompleter {
 
     private boolean inviteCommand(Player commandSender, Command command, String label, String[] args) {
         if (args.length < 2) {
-            return false;
+            commandSender.sendMessage("[voicechat] 用法：/voicechat invite <玩家>");
+            return true;
         }
 
         Player player = parsePlayer(commandSender, args[1]);
@@ -215,7 +248,8 @@ public class VoiceChatCommands implements CommandExecutor, TabCompleter {
 
     private boolean joinCommand(Player commandSender, Command command, String label, String[] args) {
         if (args.length < 2) {
-            return false;
+            commandSender.sendMessage("[voicechat] 用法：/voicechat join <群组名称或UUID> [密码]");
+            return true;
         }
 
         int argIndex = 1;

@@ -73,12 +73,15 @@ compileJava.dependsOn generateBuildConstants
 
 tasks.register('generateFallbackTranslations') {
     def inputFile = rootProject.file('common/src/main/resources/assets/voicechat/lang/en_us.json')
+    def chineseFile = rootProject.file('common/src/main/resources/assets/voicechat/lang/zh_cn.json')
     def outputFile = file("${layout.buildDirectory.asFile.get()}/generated/java/de/maxhenkel/voicechat/FallbackTranslations.java")
-    inputs.file inputFile
+    inputs.files inputFile, chineseFile
     outputs.file outputFile
 
     doLast {
-        def json = new JsonSlurper().parse(inputFile)
+        def json = new JsonSlurper().parse(inputFile) + new JsonSlurper().parse(chineseFile)
+        json['argument.entity.notfound.player'] = '找不到该在线玩家。'
+        json['message.voicechat.ping_received_attempt'] = '第 %2$s 次尝试收到回应，耗时 %1$s 毫秒。'
         outputFile.getParentFile().mkdirs()
 
         def stringBuilder = new StringBuilder()

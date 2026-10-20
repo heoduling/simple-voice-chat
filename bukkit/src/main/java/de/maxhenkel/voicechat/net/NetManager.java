@@ -156,6 +156,24 @@ public class NetManager implements Listener {
         sendToClient(player, p, false);
     }
 
+    /** Direct send for ordered hot-load cleanup. Caller MUST already own this player. */
+    public static boolean sendToClientOnOwner(Player player, Packet<?> packet) {
+        Voicechat plugin = Voicechat.INSTANCE;
+        if (!Voicechat.ACTIVE || plugin == null || !plugin.isEnabled() || !player.isOnline()) return false;
+        if (!Bukkit.isOwnedByCurrentRegion(player)) throw new IllegalStateException("Player packet sent outside its entity owner");
+        try {
+            FriendlyByteBuf buf = new FriendlyByteBuf();
+            packet.toBytes(buf);
+            byte[] bytes = new byte[buf.readableBytes()];
+            buf.readBytes(bytes);
+            player.sendPluginMessage(plugin, packet.getID().toString(), bytes);
+            return true;
+        } catch (Exception exception) {
+            Voicechat.LOGGER.error("Failed to send hot-load cleanup to {}", player.getName(), exception);
+            return false;
+        }
+    }
+
     private static void sendToClient(Player player, Packet<?> p, boolean requireCompatible) {
         Compatibility compatibility = Voicechat.compatibility;
         if (compatibility == null) {

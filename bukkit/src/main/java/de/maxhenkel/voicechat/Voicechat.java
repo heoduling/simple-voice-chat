@@ -7,6 +7,8 @@ import de.maxhenkel.voicechat.compatibility.BukkitCompatibilityManager;
 import de.maxhenkel.voicechat.compatibility.Compatibility;
 import de.maxhenkel.voicechat.config.ServerConfig;
 import de.maxhenkel.voicechat.config.Translations;
+import de.maxhenkel.voicechat.config.ReloadValidation;
+import de.maxhenkel.voicechat.config.ReadableProperties;
 import de.maxhenkel.voicechat.integration.commodore.CommodoreCommands;
 import de.maxhenkel.voicechat.integration.commodore.MissingArgumentTypeException;
 import de.maxhenkel.voicechat.integration.placeholderapi.VoicechatExpansion;
@@ -25,6 +27,8 @@ import de.maxhenkel.voicechat.commodore.Commodore;
 import de.maxhenkel.voicechat.commodore.CommodoreProvider;
 import org.bukkit.Bukkit;
 import org.bukkit.command.PluginCommand;
+import org.bukkit.command.CommandSender;
+import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.HandlerList;
 import org.bukkit.event.Listener;
@@ -53,6 +57,7 @@ public final class Voicechat extends JavaPlugin implements Listener {
     public static volatile Compatibility compatibility;
     private VoicechatExpansion placeholderExpansion;
     private final Object lifecycleLock = new Object();
+    private final java.util.concurrent.atomic.AtomicBoolean reloading = new java.util.concurrent.atomic.AtomicBoolean();
 
     public static final int MAX_GROUP_NAME_LENGTH = 24;
     public static final Pattern GROUP_REGEX = Pattern.compile("^[^\\p{C}\\s][^\\p{C}]{0,23}$");
@@ -81,8 +86,18 @@ public final class Voicechat extends JavaPlugin implements Listener {
 
         LOGGER.info("Compatibility version {}", COMPATIBILITY_VERSION);
 
-        SERVER_CONFIG = ConfigBuilder.builder(ServerConfig::new).path(getDataFolder().toPath().resolve("voicechat-server.properties")).build();
-        TRANSLATIONS = ConfigBuilder.builder(Translations::new).path(getDataFolder().toPath().resolve("translations.properties")).build();
+        SERVER_CONFIG = ConfigBuilder.builder(ServerConfig::new)
+                .removeUnused(false)
+                .path(getDataFolder().toPath().resolve("voicechat-server.properties"))
+                .saveSyncAfterBuild(true)
+                .build();
+        TRANSLATIONS = ConfigBuilder.builder(Translations::new)
+                .removeUnused(false)
+                .path(getDataFolder().toPath().resolve("translations.properties"))
+                .migration(Translations::migrateLegacyDefaults)
+                .saveSyncAfterBuild(true)
+                .build();
+        normalizeChineseConfigs();
 
         netManager = new NetManager();
         netManager.onEnable();
@@ -158,6 +173,84 @@ public final class Voicechat extends JavaPlugin implements Listener {
     private void disablePlugin() {
         LOGGER.fatal("Disabling {}", BuildConstants.PLUGIN_NAME);
         Bukkit.getPluginManager().disablePlugin(this);
+    }
+
+    public void reloadConfiguration(CommandSender sender) {
+        if (!reloading.compareAndSet(false, true)) {
+            sender.sendMessage("[voicechat] 配置正在重载，请稍后再试。");
+            return;
+        }
+        sender.sendMessage("[voicechat] 正在读取配置并重新建立语音连接，群组及成员关系将保留。");
+        try {
+            getServer().getAsyncScheduler().runNow(this, task -> {
+                try {
+                    java.util.Properties rawConfig = ReloadValidation.readProperties(
+                            getDataFolder().toPath().resolve("voicechat-server.properties"));
+                    ServerConfig config = ConfigBuilder.builder(ServerConfig::new)
+                            .removeUnused(false)
+                            .path(getDataFolder().toPath().resolve("voicechat-server.properties"))
+                            .saveAfterBuild(false).build();
+                    Translations translations = ConfigBuilder.builder(Translations::new)
+                            .removeUnused(false)
+                            .path(getDataFolder().toPath().resolve("translations.properties"))
+                            .migration(Translations::migrateLegacyDefaults)
+                            .saveAfterBuild(false).build();
+                    ReloadValidation.validateValues(config, rawConfig);
+                    ServerConfig currentConfig = SERVER_CONFIG;
+                    if (!ACTIVE || INSTANCE != this || currentConfig == null || !isEnabled()) {
+                        reloading.set(false);
+                        return;
+                    }
+                    ReloadValidation.validate(currentConfig, config);
+                    config.voiceHost.saveSync();
+                    translations.playerCommandMessage.saveSync();
+                    normalizeChineseConfigs();
+                    getServer().getGlobalRegionScheduler().execute(this, () -> {
+                        try {
+                            synchronized (lifecycleLock) {
+                                if (!ACTIVE || INSTANCE != this || !isEnabled() || SERVER == null) return;
+                                ReloadValidation.validate(SERVER_CONFIG, config);
+                                SERVER_CONFIG = config;
+                                TRANSLATIONS = translations;
+                                SERVER.resyncOnlinePlayers();
+                            }
+                            reloadFeedback(sender, "配置已重载；正在重新下发连接地址 " + config.voiceHost.get() + "，群组已保留。");
+                            LOGGER.info("Voice chat config reloaded; voice_host={}", config.voiceHost.get());
+                        } catch (Exception exception) {
+                            reloadFeedback(sender, "重载失败：" + exception.getMessage());
+                            LOGGER.warn("Failed to reload voice chat config", exception);
+                        } finally {
+                            reloading.set(false);
+                        }
+                    });
+                } catch (Exception exception) {
+                    reloading.set(false);
+                    reloadFeedback(sender, "重载失败：" + exception.getMessage());
+                    LOGGER.warn("Failed to read voice chat config", exception);
+                }
+            });
+        } catch (RuntimeException exception) {
+            reloading.set(false);
+            sender.sendMessage("[voicechat] 无法启动重载：" + exception.getMessage());
+        }
+    }
+
+    private void reloadFeedback(CommandSender sender, String message) {
+        if (!ACTIVE || INSTANCE != this || !isEnabled()) return;
+        if (sender instanceof Player player) {
+            player.getScheduler().execute(this, () -> {
+                if (ACTIVE && INSTANCE == this && player.isOnline()) player.sendMessage("[voicechat] " + message);
+            }, null, 1L);
+        } else {
+            getServer().getGlobalRegionScheduler().execute(this, () -> {
+                if (ACTIVE && INSTANCE == this) sender.sendMessage("[voicechat] " + message);
+            });
+        }
+    }
+
+    private void normalizeChineseConfigs() {
+        ReadableProperties.normalize(getDataFolder().toPath().resolve("voicechat-server.properties"));
+        ReadableProperties.normalize(getDataFolder().toPath().resolve("translations.properties"));
     }
 
     @Override

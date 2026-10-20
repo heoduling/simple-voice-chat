@@ -5,6 +5,7 @@ import de.maxhenkel.voicechat.config.Translations;
 import de.maxhenkel.voicechat.voice.common.PlayerState;
 import de.maxhenkel.voicechat.voice.server.Server;
 import de.maxhenkel.voicechat.voice.server.ServerVoiceEvents;
+import de.maxhenkel.voicechat.voice.server.TalkingState;
 import me.clip.placeholderapi.expansion.PlaceholderExpansion;
 import org.bukkit.entity.Player;
 import org.jetbrains.annotations.NotNull;
@@ -50,6 +51,14 @@ public class VoicechatExpansion extends PlaceholderExpansion {
             return events.isCompatible(player) ? translations.placeholderVoicechatInstalled.get() : "";
         } else if (params.equalsIgnoreCase("not_installed")) {
             return !events.isCompatible(player) ? translations.placeholderVoicechatNotInstalled.get() : "";
+        } else if (params.equalsIgnoreCase("talking") || params.equalsIgnoreCase("is_talking")) {
+            return TalkingState.isTalking(player.getUniqueId())
+                    ? translations.placeholderVoicechatTalking.get()
+                    : translations.placeholderVoicechatNotTalking.get();
+        } else if (params.equalsIgnoreCase("talking_icon")) {
+            return TalkingState.isTalking(player.getUniqueId())
+                    ? translations.placeholderVoicechatTalkingIcon.get()
+                    : translations.placeholderVoicechatNotTalkingIcon.get();
         } else if (params.equalsIgnoreCase("disabled")) {
             Server server = events.getServer();
             if (server == null) {

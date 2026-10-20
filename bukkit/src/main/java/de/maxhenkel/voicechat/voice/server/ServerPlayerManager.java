@@ -43,6 +43,10 @@ public class ServerPlayerManager implements Listener {
         INSTANCE.players.clear();
     }
 
+    public static java.util.List<UUID> getPlayerIds() {
+        return java.util.List.copyOf(INSTANCE.players.keySet());
+    }
+
     private final ConcurrentMap<UUID, PlayerSnapshot> players;
     private volatile boolean active;
 

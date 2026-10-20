@@ -1,0 +1,71 @@
+import groovy.json.JsonSlurper
+plugins {
+    id 'java'
+    id 'com.gradleup.shadow' version '9.3.2'
+}
+version = '2.6.21-hotload.3'
+def sourceRoot = file('..')
+def runtimeJar = providers.gradleProperty('voicechatRuntimeJar').get()
+def serverLibraries = providers.gradleProperty('voicechatServerLibraries').get()
+java.toolchain.languageVersion = JavaLanguageVersion.of(25)
+repositories { mavenCentral() }
+dependencies {
+    compileOnly files(runtimeJar)
+    compileOnly fileTree(serverLibraries) { include '**/*.jar' }
+    compileOnly files(providers.gradleProperty('voicechatPlaceholderJar').get())
+    testImplementation files(runtimeJar)
+    testImplementation fileTree(serverLibraries) { include '**/*.jar' }
+}
+sourceSets {
+    main {
+        java.srcDirs = [layout.buildDirectory.dir('overlay/java'), new File(sourceRoot, 'api/src/main/java'), layout.buildDirectory.dir('generated/java')]
+        resources.srcDirs = [new File(sourceRoot, 'bukkit/src/main/resources')]
+    }
+    test { java.srcDirs = [new File(sourceRoot, 'bukkit/src/test/java')] }
+}
+tasks.register('generateBuildConstants', Copy) {
+    from new File(sourceRoot, 'bukkit/src/template/java')
+    into layout.buildDirectory.dir('generated/java')
+    expand compatibility_version: 20, mod_compatible_version: '2.6.x', target_bukkit_version: '26.2-local-SNAPSHOT', plugin_name: 'Simple Voice Chat'
+}
+tasks.register('generateFallbackTranslations') {
+    def inputFile = new File(sourceRoot, 'common/src/main/resources/assets/voicechat/lang/en_us.json')
+    def chineseFile = new File(sourceRoot, 'common/src/main/resources/assets/voicechat/lang/zh_cn.json')
+    def outputFile = layout.buildDirectory.file('generated/java/de/maxhenkel/voicechat/FallbackTranslations.java')
+    inputs.files(inputFile, chineseFile); outputs.file(outputFile)
+    doLast {
+        def translations = new JsonSlurper().parse(inputFile) + new JsonSlurper().parse(chineseFile)
+        translations['argument.entity.notfound.player'] = '找不到该在线玩家。'
+        translations['message.voicechat.ping_received_attempt'] = '第 %2$s 次尝试收到回应，耗时 %1$s 毫秒。'
+        def lines = translations.collect { key, value ->
+            def escape = { it.toString().replace('\\','\\\\').replace('\n','\\n').replace('"','\\"') }
+            'translations.put("' + escape(key) + '","' + escape(value) + '");'
+        }.join('\n')
+        def f = outputFile.get().asFile; f.parentFile.mkdirs()
+        f.text = 'package de.maxhenkel.voicechat; public class FallbackTranslations { public static final java.util.Map<String,String> FALLBACK_TRANSLATIONS; static { java.util.Map<String,String> translations = new java.util.HashMap<>();\n' + lines + '\nFALLBACK_TRANSLATIONS = java.util.Collections.unmodifiableMap(translations); } }'
+    }
+}
+tasks.register('prepareOverlaySources', Sync) {
+    from new File(sourceRoot, 'bukkit/src/main/java')
+    into layout.buildDirectory.dir('overlay/java')
+    filteringCharset = 'UTF-8'
+    filter { String line -> line.replace('org.concentus.', 'de.maxhenkel.voicechat.concentus.').replace('org.json.', 'de.maxhenkel.voicechat.org.json.') }
+}
+compileJava.dependsOn 'generateBuildConstants', 'generateFallbackTranslations', 'prepareOverlaySources'
+processResources { filesMatching('plugin.yml') { expand version: project.version } }
+tasks.register('pluginSelfTest', JavaExec) {
+    dependsOn testClasses
+    mainClass = 'de.maxhenkel.voicechat.plugins.PluginEventSnapshotSelfTest'
+    classpath = sourceSets.test.runtimeClasspath + files(runtimeJar) + fileTree(serverLibraries) { include '**/*.jar' }
+}
+check.dependsOn pluginSelfTest
+// This repository uses a main-based assertion suite, not JUnit.
+test { failOnNoDiscoveredTests = false }
+shadowJar {
+    archiveClassifier = ''
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    from(zipTree(runtimeJar)) { exclude 'META-INF/MANIFEST.MF', 'plugin.yml' }
+    relocate 'org.concentus', 'de.maxhenkel.voicechat.concentus'
+    relocate 'me.lucko.commodore', 'de.maxhenkel.voicechat.commodore'
+}
+build.dependsOn shadowJar

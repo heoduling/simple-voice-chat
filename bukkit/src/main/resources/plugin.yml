@@ -4,20 +4,20 @@ main: de.maxhenkel.voicechat.Voicechat
 api-version: 1.13
 prefix: voicechat
 authors: [ "Max Henkel", "Matthew Wells" ]
-description: A working voice chat in Minecraft
+description: Minecraft 简单语音聊天，支持 Folia、中文帮助、配置重载和说话状态变量
 website: https://modrepo.de/minecraft/voicechat/overview
 folia-supported: true
 commands:
   voicechat:
-    description: Manage voice chat
-    usage: Invalid command syntax
+    description: 语音聊天管理；使用 /voicechat help 查看中文帮助
+    usage: '用法：/voicechat help'
 permissions:
   voicechat.listen:
-    description: Allows to listen to voice chat
+    description: 允许收听语音聊天
   voicechat.speak:
-    description: Allows to speak in voice chat
+    description: 允许通过语音聊天发言
   voicechat.groups:
-    description: Allows to join groups
+    description: 允许创建和加入语音群组
   voicechat.admin:
-    description: Allows to test voice chat connections
+    description: 允许检测玩家语音连接和重载语音配置
 softdepend: [PlaceholderAPI, ViaVersion]

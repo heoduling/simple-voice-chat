@@ -22,17 +22,29 @@ public class Compatibility1_21_5 extends Compatibility1_20_3 {
     public static final Compatibility1_21_5 INSTANCE = new Compatibility1_21_5();
 
     @Override
+    public String createTranslationMessage(String key, String... args) {
+        return new JSONObject().put("text", FallbackCompatibility.fallbackTranslation(key, args)).toString();
+    }
+
+    @Override
+    public void sendIncompatibleMessage(Player player, String pluginVersion, String pluginName) {
+        de.maxhenkel.voicechat.config.Translations translations = de.maxhenkel.voicechat.Voicechat.TRANSLATIONS;
+        if (translations != null) {
+            player.sendMessage(String.format(translations.voicechatNotCompatibleMessage.get(), pluginVersion, pluginName).replace("\\n", "\n"));
+        }
+    }
+
+    @Override
     public void sendInviteMessage(Player player, String commandSenderName, String groupName, String joinCommand) {
         sendJsonMessage(player, constructInviteMessage(commandSenderName, groupName, joinCommand));
     }
 
     public static String constructInviteMessage(String commandSenderName, String groupName, String joinCommand) {
         JSONObject msg = new JSONObject();
-        msg.put("translate", "message.voicechat.invite");
+        msg.put("text", commandSenderName + " 邀请你加入语音群组 ");
 
         JSONArray args = new JSONArray();
 
-        args.put(commandSenderName);
 
         JSONObject groupNameObj = new JSONObject();
         groupNameObj.put("color", "gray");
@@ -40,12 +52,12 @@ public class Compatibility1_21_5 extends Compatibility1_20_3 {
         args.put(groupNameObj);
 
         JSONObject acceptInBrackets = new JSONObject();
-        acceptInBrackets.put("translate", "chat.square_brackets");
+        acceptInBrackets.put("text", " [");
         acceptInBrackets.put("color", "green");
         JSONArray withBrackets = new JSONArray();
 
         JSONObject accept = new JSONObject();
-        accept.put("translate", "message.voicechat.accept_invite");
+        accept.put("text", "接受邀请");
 
         JSONObject clickEvent = new JSONObject();
         clickEvent.put("action", "run_command");
@@ -55,16 +67,17 @@ public class Compatibility1_21_5 extends Compatibility1_20_3 {
         JSONObject hoverEvent = new JSONObject();
         hoverEvent.put("action", "show_text");
         JSONObject contents = new JSONObject();
-        contents.put("translate", "message.voicechat.accept_invite.hover");
+        contents.put("text", "点击加入该语音群组");
         hoverEvent.put("value", contents);
         accept.put("hover_event", hoverEvent);
 
         withBrackets.put(accept);
+        withBrackets.put(new JSONObject().put("text", "]"));
 
-        acceptInBrackets.put("with", withBrackets);
+        acceptInBrackets.put("extra", withBrackets);
         args.put(acceptInBrackets);
 
-        msg.put("with", args);
+        msg.put("extra", args);
 
         return msg.toString();
     }

@@ -127,6 +127,7 @@ public class ServerVoiceEvents implements Listener {
         if (!Voicechat.ACTIVE || server == null || plugin == null || !plugin.isEnabled()) return;
         int generation = resyncGeneration.incrementAndGet();
         List<UUID> playerIds = Bukkit.getOnlinePlayers().stream().map(Player::getUniqueId).toList();
+        server.getGroupManager().retainOnlineCleanup(playerIds);
         scheduleResyncBatch(playerIds, generation, 0);
     }
 
@@ -158,6 +159,11 @@ public class ServerVoiceEvents implements Listener {
                 || plugin == null || !plugin.isEnabled()) return;
         ServerPlayerManager.refreshPlayer(player);
         activeNetManager.synchronizePlayer(player);
+        activeServer.getGroupManager().clearPreviousGroups(player);
+        if (activeServer.hasSecret(player.getUniqueId())) {
+            // A config reload keeps groups/states but replaces the UDP session and encryption key.
+            activeServer.disconnectClient(player.getUniqueId());
+        }
         Secret secret = activeServer.generateHotloadSecret(player.getUniqueId());
         if (secret != null) {
             // Do not assume that an existing player has the mod. Only a real
@@ -216,9 +222,12 @@ public class ServerVoiceEvents implements Listener {
             compatibility.runForPlayer(player, () -> {
                 Voicechat plugin = Voicechat.INSTANCE;
                 if (!Voicechat.ACTIVE || !player.isOnline() || plugin == null || !plugin.isEnabled()) return;
+                ServerConfig currentConfig = Voicechat.SERVER_CONFIG;
+                Translations currentTranslations = Voicechat.TRANSLATIONS;
+                if (currentConfig == null || !currentConfig.forceVoiceChat.get() || currentTranslations == null) return;
                 if (!isCompatible(player)) {
                     player.kickPlayer(String.format(
-                            translations.forceVoicechatKickMessage.get(),
+                            currentTranslations.forceVoicechatKickMessage.get(),
                             BuildConstants.PLUGIN_NAME,
                             plugin.getDescription().getVersion()
                     ));
